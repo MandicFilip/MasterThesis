@@ -25,7 +25,8 @@ from ryu.lib.packet import in_proto
 from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
-
+from ryu.lib import hub
+from ryu import cfg
 
 class SimpleSwitch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
@@ -33,6 +34,12 @@ class SimpleSwitch13(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
+        self.stats_switch = None
+        self.stat_thread = hub.spawn(self._request_stats_thread)
+        self.CONF = cfg.CONF
+        self.CONF.register_opts([cfg.IntOpt('INTERVAL', default=10, help=('Monitoring Interval'))])
+        self.logger.info("Statistics interval value: %d seconds", self.CONF.INTERVAL)
+
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -40,12 +47,46 @@ class SimpleSwitch13(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        # install table-miss flow entry
+        # we have only one switch, otherwise change to list
+        self.stats_switch = datapath
 
+        # install table-miss flow entry
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
+
+    def _request_stats_thread(self):
+        while True:
+            if self.stats_switch is not None:
+                datapath = self.stats_switch
+                self.logger.debug('send stats request: %016x', datapath.id)
+                parser = datapath.ofproto_parser
+
+                req = parser.OFPFlowStatsRequest(datapath)
+                datapath.send_msg(req)
+
+            hub.sleep(self.CONF.INTERVAL)
+
+    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+    def _flow_stats_reply_handler(self, ev):
+        body = ev.msg.body
+
+        self.logger.info('datapath '
+                         'ipv4_src ipv4_dst '
+                         'out-port packets bytes')
+        self.logger.info('---------------- '
+                         '----------------- ------------------ '
+                         '-------- -------- --------')
+
+        for stat in sorted([flow for flow in body if flow.priority == 1],
+                            key=lambda flow: (flow.match['ipv4_src'],
+                                         flow.match['ipv4_dst'])):
+            self.logger.info('%016x %17s %17s %8x %8d %8d',
+                         ev.msg.datapath.id,
+                         stat.match['ipv4_src'], stat.match['ipv4_dst'],
+                         stat.instructions[0].actions[0].port,
+                         stat.packet_count, stat.byte_count)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
@@ -102,7 +143,7 @@ class SimpleSwitch13(app_manager.RyuApp):
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
 
-            #check if it is IP
+            # check if it is IP
             if eth.ethertype == ether_types.ETH_TYPE_IP:
                 ip = pkt.get_protocol(ipv4.ipv4)
                 protocol = ip.proto
