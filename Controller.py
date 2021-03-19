@@ -34,6 +34,7 @@ class SimpleSwitch13(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
+        self.prev_stats = None
         self.stats_switch = None
         self.stat_thread = hub.spawn(self._request_stats_thread)
         self.CONF = cfg.CONF
@@ -68,25 +69,64 @@ class SimpleSwitch13(app_manager.RyuApp):
 
             hub.sleep(self.CONF.INTERVAL)
 
+    def ofpmatch_to_map(self, match):
+        match_map = {'ip_proto': match['ip_proto'], 'ipv4_src': match['ipv4_src'], 'ipv4_dst': match['ipv4_dst']}
+
+        if match['ip_proto'] == in_proto.IPPROTO_TCP:
+            match_map['tcp_src'] = match['tcp_src']
+            match_map['tcp_dst'] = match['tcp_dst']
+        elif match['ip_proto'] == in_proto.IPPROTO_UDP:
+            match_map['udp_src'] = match['udp_src']
+            match_map['udp_dst'] = match['udp_dst']
+
+        return match_map
+
+    # for now just printing, later sending to program for processing
+    def forward_stats(self, diff_stats):
+        print("Here are diff stats (Match, bytes counter, packet counter):")
+        print(diff_stats['active'])
+
+        print("here are finished flows:")
+        print(diff_stats['finished'])
+
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         body = ev.msg.body
 
-        self.logger.info('datapath '
-                         'ipv4_src ipv4_dst '
-                         'out-port packets bytes')
-        self.logger.info('---------------- '
-                         '----------------- ------------------ '
-                         '-------- -------- --------')
+        # filter stats
+        flow_stat = {'active': None, 'finished': None}
+        active_flows = []
+        finished_flows = []
 
-        for stat in sorted([flow for flow in body if flow.priority == 1],
-                            key=lambda flow: (flow.match['ipv4_src'],
-                                         flow.match['ipv4_dst'])):
-            self.logger.info('%016x %17s %17s %8x %8d %8d',
-                         ev.msg.datapath.id,
-                         stat.match['ipv4_src'], stat.match['ipv4_dst'],
-                         stat.instructions[0].actions[0].port,
-                         stat.packet_count, stat.byte_count)
+        # filter data and packet in flow
+        for flow in body:
+            if flow.priority > 0:
+                active_flows.append({'match': self.ofpmatch_to_map(flow.match),
+                                     'byte_count': flow.byte_count,
+                                     'packet_count': flow.packet_count,
+                                     'total_byte_count': flow.byte_count,
+                                     'total_packet_count': flow.packet_count})
+
+        # if not first report, find diff
+        if self.prev_stats is not None:
+            # complexity!!!
+            for new_stat in active_flows:
+                for old_stat in self.prev_stats['active']:
+                    if new_stat['match'] == old_stat['match']:
+                        old_stat['found'] = True
+                        new_stat['byte_count'] = new_stat['byte_count'] - old_stat['total_byte_count']
+                        new_stat['packet_count'] = new_stat['packet_count'] - old_stat['total_packet_count']
+                        break
+
+            for old_stat in self.prev_stats['active']:
+                if old_stat.get('found') is None:
+                    finished_flows.append(old_stat['match'])
+
+        flow_stat['active'] = active_flows
+        flow_stat['finished'] = finished_flows
+        self.prev_stats = flow_stat
+
+        self.forward_stats(flow_stat)
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
         ofproto = datapath.ofproto
