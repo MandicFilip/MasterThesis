@@ -28,19 +28,21 @@ from ryu.lib.packet import udp
 from ryu.lib import hub
 from ryu import cfg
 
+ICMP_PRIORITY_LEVEL = 1
+TCP_UDP_PRIORITY_LEVEL = 2
+
+
+# TCP_FLAGS_PRORITY_LEVEL = 3
+
 class SimpleSwitch13(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
-        self.prev_stats = None
-        self.stats_switch = None
-        self.stat_thread = hub.spawn(self._request_stats_thread)
         self.CONF = cfg.CONF
-        self.CONF.register_opts([cfg.IntOpt('INTERVAL', default=10, help=('Monitoring Interval'))])
-        self.logger.info("Statistics interval value: %d seconds", self.CONF.INTERVAL)
-
+        self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT', default=10, help=('Idle Timeout'))])
+        self.logger.info("Idle timeout: %d seconds", self.CONF.IDLE_TIMEOUT)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -57,78 +59,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
-    def _request_stats_thread(self):
-        while True:
-            if self.stats_switch is not None:
-                datapath = self.stats_switch
-                self.logger.debug('send stats request: %016x', datapath.id)
-                parser = datapath.ofproto_parser
-
-                req = parser.OFPFlowStatsRequest(datapath)
-                datapath.send_msg(req)
-
-            hub.sleep(self.CONF.INTERVAL)
-
-    def ofpmatch_to_map(self, match):
-        match_map = {'ip_proto': match['ip_proto'], 'ipv4_src': match['ipv4_src'], 'ipv4_dst': match['ipv4_dst']}
-
-        if match['ip_proto'] == in_proto.IPPROTO_TCP:
-            match_map['tcp_src'] = match['tcp_src']
-            match_map['tcp_dst'] = match['tcp_dst']
-        elif match['ip_proto'] == in_proto.IPPROTO_UDP:
-            match_map['udp_src'] = match['udp_src']
-            match_map['udp_dst'] = match['udp_dst']
-
-        return match_map
-
-    # for now just printing, later sending to program for processing
-    def forward_stats(self, diff_stats):
-        print("Here are diff stats (Match, bytes counter, packet counter):")
-        print(diff_stats['active'])
-
-        print("here are finished flows:")
-        print(diff_stats['finished'])
-
-    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
-    def _flow_stats_reply_handler(self, ev):
-        body = ev.msg.body
-
-        # filter stats
-        flow_stat = {'active': None, 'finished': None}
-        active_flows = []
-        finished_flows = []
-
-        # filter data and packet in flow
-        for flow in body:
-            if flow.priority > 0:
-                active_flows.append({'match': self.ofpmatch_to_map(flow.match),
-                                     'byte_count': flow.byte_count,
-                                     'packet_count': flow.packet_count,
-                                     'total_byte_count': flow.byte_count,
-                                     'total_packet_count': flow.packet_count})
-
-        # if not first report, find diff
-        if self.prev_stats is not None:
-            # complexity!!!
-            for new_stat in active_flows:
-                for old_stat in self.prev_stats['active']:
-                    if new_stat['match'] == old_stat['match']:
-                        old_stat['found'] = True
-                        new_stat['byte_count'] = new_stat['byte_count'] - old_stat['total_byte_count']
-                        new_stat['packet_count'] = new_stat['packet_count'] - old_stat['total_packet_count']
-                        break
-
-            for old_stat in self.prev_stats['active']:
-                if old_stat.get('found') is None:
-                    finished_flows.append(old_stat['match'])
-
-        flow_stat['active'] = active_flows
-        flow_stat['finished'] = finished_flows
-        self.prev_stats = flow_stat
-
-        self.forward_stats(flow_stat)
-
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+    def add_flow(self, datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
@@ -137,10 +68,10 @@ class SimpleSwitch13(app_manager.RyuApp):
         if buffer_id:
             mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
                                     priority=priority, match=match,
-                                    instructions=inst)
+                                    instructions=inst, idle_timeout=idle_timeout)
         else:
             mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst)
+                                    match=match, instructions=inst, idle_timeout=idle_timeout)
         datapath.send_msg(mod)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -190,6 +121,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
                 match = parser.OFPMatch()
 
+                priority = ICMP_PRIORITY_LEVEL
                 # Match if not TCP or UDP (for example ICMP protocol)
                 if (protocol != in_proto.IPPROTO_TCP) and (protocol != in_proto.IPPROTO_UDP):
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip.src, ipv4_dst=ip.dst,
@@ -197,6 +129,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
                 elif protocol == in_proto.IPPROTO_TCP:
                     tcp_p = pkt.get_protocol(tcp.tcp)
+                    priority = TCP_UDP_PRIORITY_LEVEL
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                             ipv4_src=ip.src,
                                             ipv4_dst=ip.dst,
@@ -206,6 +139,7 @@ class SimpleSwitch13(app_manager.RyuApp):
 
                 elif protocol == in_proto.IPPROTO_UDP:
                     udp_p = pkt.get_protocol(udp.udp)
+                    priority = TCP_UDP_PRIORITY_LEVEL
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                             ipv4_src=ip.src,
                                             ipv4_dst=ip.dst,
@@ -216,10 +150,10 @@ class SimpleSwitch13(app_manager.RyuApp):
                 # verify if we have a valid buffer_id, if yes avoid to send both
                 # flow_mod & packet_out
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, 1, match, actions, msg.buffer_id)
+                    self.add_flow(datapath, priority, match, actions, msg.buffer_id, self.CONF.IDLE_TIMEOUT)
                     return
                 else:
-                    self.add_flow(datapath, 1, match, actions)
+                    self.add_flow(datapath, priority, match, actions, self.CONF.IDLE_TIMEOUT)
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
