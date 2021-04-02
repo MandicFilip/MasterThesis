@@ -4,6 +4,7 @@ import time
 from data_collector import get_data
 from DataTable import DataTable
 
+
 def process_data(data):
     pass
 
@@ -16,7 +17,6 @@ def handler(sleep_interval, url):
         if success:
             process_data(data)
         else:
-            # print("ERROR RETRIEVING DATA!")
             data.fill_zeros()
         time.sleep(sleep_interval)
 

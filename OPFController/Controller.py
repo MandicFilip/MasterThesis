@@ -17,7 +17,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_5
 from ryu.lib.packet import packet
 from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
@@ -25,17 +25,17 @@ from ryu.lib.packet import in_proto
 from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
-from ryu.lib import hub
 from ryu import cfg
 
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
+TCP_FLAGS_PRIORITY_LEVEL = 3
 
 
 # TCP_FLAGS_PRORITY_LEVEL = 3
 
 class SimpleSwitch13(app_manager.RyuApp):
-    OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+    OFP_VERSIONS = [ofproto_v1_5.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SimpleSwitch13, self).__init__(*args, **kwargs)
@@ -59,6 +59,12 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, 0, match, actions)
 
+        # install tcp flags flow entry
+        match = parser.OFPMatch(eth_type=0x0800, ip_proto=6, tcp_flags=(0x001 | 0x004))
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
+                                          ofproto.OFPCML_NO_BUFFER)]
+        self.add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
+
     def add_flow(self, datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -74,6 +80,18 @@ class SimpleSwitch13(app_manager.RyuApp):
                                     match=match, instructions=inst, idle_timeout=idle_timeout)
         datapath.send_msg(mod)
 
+    def delete_flow(self, datapath, match):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        mod = parser.OFPFlowMod(datapath,
+                                command=ofproto.OFPFC_DELETE_STRICT,
+                                out_port=ofproto.OFPP_ANY,
+                                out_group=ofproto.OFPG_ANY,
+                                priority=TCP_UDP_PRIORITY_LEVEL,
+                                match=match)
+        datapath.send_msg(mod)
+
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         # If you hit this you might want to increase
@@ -82,12 +100,17 @@ class SimpleSwitch13(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
+
         datapath = msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         in_port = msg.match['in_port']
 
         pkt = packet.Packet(msg.data)
+
+        print("Packet:")
+        print(pkt)
+
         eth = pkt.get_protocols(ethernet.ethernet)[0]
 
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
@@ -159,6 +182,8 @@ class SimpleSwitch13(app_manager.RyuApp):
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
 
+        match = parser.OFPMatch(in_port=in_port)
+
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  in_port=in_port, actions=actions, data=data)
+                                  match=match, actions=actions, data=data)
         datapath.send_msg(out)
