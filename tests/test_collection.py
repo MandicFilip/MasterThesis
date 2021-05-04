@@ -380,9 +380,27 @@ second_finished = [
         'byte_count': 20540,
         'packet_count': 3007
     },
+{
+        'ip_src': "205.0.0.1",
+        'ip_dst': "245.13.14.2",
+        'port_src': 12000,
+        'port_dst': 22000,
+        'protocol_code': 16,
+        'byte_count': 500,
+        'packet_count': 5
+    },
+    {
+        'ip_src': "206.0.0.1",
+        'ip_dst': "236.13.14.2",
+        'port_src': 11200,
+        'port_dst': 21200,
+        'protocol_code': 17,
+        'byte_count': 600,
+        'packet_count': 6
+    },
 ]
 
-second_finished_results = [0, 3, 13, 11, 12, 4, 10]
+second_finished_results = [0, 3, 13, 11, 12, 4, 10, 16, 17]
 
 third_update = [
     {

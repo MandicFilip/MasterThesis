@@ -2,7 +2,7 @@ from operator import itemgetter
 
 import tests.test_collection
 import random
-import DataTable
+from dataryu import FlowDataTable
 
 
 def run_test(dataTable, data, result):
@@ -47,7 +47,7 @@ def run_delete_test(dataTable, values, result):
     pass
 
 
-table = DataTable.DataTable()
+table = FlowDataTable.FlowDataTable()
 
 run_test(table, tests.test_collection.init_data_table, tests.test_collection.init_result)
 run_test(table, tests.test_collection.first_update, tests.test_collection.first_update_result)

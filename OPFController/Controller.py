@@ -26,23 +26,37 @@ from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 from ryu import cfg
+from ryu.lib import hub
 
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
 
 
-# TCP_FLAGS_PRORITY_LEVEL = 3
+def ofmatch_to_map(match):
+    match_map = {'protocol_code': match['ip_proto'], 'ipv4_src': match['ipv4_src'], 'ipv4_dst': match['ipv4_dst']}
 
-class SimpleSwitch13(app_manager.RyuApp):
+    if match['ip_proto'] == in_proto.IPPROTO_TCP:
+        match_map['src_port'] = match['tcp_src']
+        match_map['dst_port'] = match['tcp_dst']
+    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
+        match_map['src_port'] = match['udp_src']
+        match_map['dst_port'] = match['udp_dst']
+
+    return match_map
+
+
+class SwitchController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_5.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
-        super(SimpleSwitch13, self).__init__(*args, **kwargs)
+        super(SwitchController, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
         self.CONF = cfg.CONF
-        self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT', default=10, help=('Idle Timeout'))])
+        self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT', default=10, help='Idle Timeout'),
+                                 cfg.IntOpt('DELETE_INTERVAL', default=1, help='Delete Interval')])
         self.logger.info("Idle timeout: %d seconds", self.CONF.IDLE_TIMEOUT)
+        self.logger.info("Delete Interval: %d seconds", self.CONF.DELETE_INTERVAL)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -65,57 +79,41 @@ class SimpleSwitch13(app_manager.RyuApp):
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
 
-    def add_flow(self, datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
+    @staticmethod
+    def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
-                                             actions)]
-        if buffer_id:
-            mod = parser.OFPFlowMod(datapath=datapath, buffer_id=buffer_id,
-                                    priority=priority, match=match,
-                                    instructions=inst, idle_timeout=idle_timeout)
-        else:
-            mod = parser.OFPFlowMod(datapath=datapath, priority=priority,
-                                    match=match, instructions=inst, idle_timeout=idle_timeout)
-        datapath.send_msg(mod)
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        cookie = cookie_mask = 0
+        table_id = 0
+        hard_timeout = 0
+        importance = 0
 
-    def delete_flow(self, datapath, match):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        if not buffer_id:
+            buffer_id = ofproto.OFP_NO_BUFFER
 
         mod = parser.OFPFlowMod(datapath,
-                                command=ofproto.OFPFC_DELETE_STRICT,
-                                out_port=ofproto.OFPP_ANY,
-                                out_group=ofproto.OFPG_ANY,
-                                priority=TCP_UDP_PRIORITY_LEVEL,
-                                match=match)
+                                cookie,
+                                cookie_mask,
+                                table_id,
+                                ofproto.OFPFC_ADD,
+                                idle_timeout,
+                                hard_timeout,
+                                priority,
+                                buffer_id,
+                                ofproto.OFPP_ANY,
+                                ofproto.OFPG_ANY,
+                                ofproto.OFPFF_SEND_FLOW_REM,
+                                importance,
+                                match,
+                                inst)
         datapath.send_msg(mod)
 
-    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def _packet_in_handler(self, ev):
-        # If you hit this you might want to increase
-        # the "miss_send_length" of your switch
-        if ev.msg.msg_len < ev.msg.total_len:
-            self.logger.debug("packet truncated: only %s of %s bytes",
-                              ev.msg.msg_len, ev.msg.total_len)
-        msg = ev.msg
-
-        datapath = msg.datapath
+    def ethernet_processing(self, datapath, msg, eth):
         ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+
         in_port = msg.match['in_port']
-
-        pkt = packet.Packet(msg.data)
-
-        print("Packet:")
-        print(pkt)
-
-        eth = pkt.get_protocols(ethernet.ethernet)[0]
-
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            # ignore lldp packet
-            return
         dst = eth.dst
         src = eth.src
 
@@ -127,12 +125,112 @@ class SimpleSwitch13(app_manager.RyuApp):
         # learn a mac address to avoid FLOOD next time.
         self.mac_to_port[dpid][src] = in_port
 
+        out_port = ofproto.OFPP_FLOOD
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
-        else:
-            out_port = ofproto.OFPP_FLOOD
 
-        actions = [parser.OFPActionOutput(out_port)]
+        return in_port, out_port
+
+    @staticmethod
+    def is_tcp_flags_packet(pkt, eth):
+        if eth.ethertype != ether_types.ETH_TYPE_IP:
+            return False
+
+        ip = pkt.get_protocol(ipv4.ipv4)
+        protocol = ip.proto
+
+        if protocol != in_proto.IPPROTO_TCP:
+            return False
+
+        tcp_p = pkt.get_protocol(tcp.tcp)
+        tcp_flags = tcp_p.bits
+
+        if tcp_flags & 0x1 or tcp_flags & 0x4:
+            return True
+
+        return False
+
+    def process_tcp_flags_packet(self, datapath, pkt, actions, buffer_id):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        ip = pkt.get_protocol(ipv4.ipv4)
+        protocol = ip.proto  # should be 6 - TCP code
+        tcp_p = pkt.get_protocol(tcp.tcp)
+        match1 = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                                 ipv4_src=ip.src,
+                                 ipv4_dst=ip.dst,
+                                 tcp_src=tcp_p.src_port,
+                                 tcp_dst=tcp_p.dst_port,
+                                 ip_proto=protocol)
+
+        match2 = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                                 ipv4_src=ip.dst,
+                                 ipv4_dst=ip.src,
+                                 tcp_src=tcp_p.dst_port,
+                                 tcp_dst=tcp_p.src_port,
+                                 ip_proto=protocol)
+
+        if buffer_id == ofproto.OFP_NO_BUFFER:
+            buffer_id = None
+
+        hub.spawn(self.delete_tcp_flow_pair, datapath, match1, match2, actions, buffer_id)
+
+    def delete_tcp_flow_pair(self, datapath, match1, match2, actions, buffer_id=None):
+        # wait for session to be closed
+        hub.sleep(self.CONF.DELETE_INTERVAL)
+
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
+
+        cookie = cookie_mask = 0
+        table_id = 0
+        hard_timeout = idle_timeout = 0
+        priority = TCP_UDP_PRIORITY_LEVEL
+        importance = 0
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        if not buffer_id:
+            buffer_id = ofproto.OFP_NO_BUFFER
+
+        mod = parser.OFPFlowMod(datapath,
+                                cookie,
+                                cookie_mask,
+                                table_id,
+                                ofproto.OFPFC_DELETE,
+                                idle_timeout,
+                                hard_timeout,
+                                priority,
+                                buffer_id,
+                                ofproto.OFPP_ANY, ofproto.OFPG_ANY,
+                                ofproto.OFPFF_SEND_FLOW_REM,
+                                importance,
+                                match1,
+                                inst)
+        datapath.send_msg(mod)
+        print("Sent first delete for match: ")
+        print(match1)
+
+        mod = parser.OFPFlowMod(datapath,
+                                cookie,
+                                cookie_mask,
+                                table_id,
+                                ofproto.OFPFC_DELETE,
+                                idle_timeout,
+                                hard_timeout,
+                                priority,
+                                buffer_id,
+                                ofproto.OFPP_ANY, ofproto.OFPG_ANY,
+                                ofproto.OFPFF_SEND_FLOW_REM,
+                                importance,
+                                match2,
+                                inst)
+        datapath.send_msg(mod)
+        print("Sent second delete for match: ")
+        print(match2)
+
+    def install_flow(self, datapath, msg, pkt, eth, out_port, actions):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
 
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
@@ -143,6 +241,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                 protocol = ip.proto
 
                 match = parser.OFPMatch()
+                idle_timeout = self.CONF.IDLE_TIMEOUT
 
                 priority = ICMP_PRIORITY_LEVEL
                 # Match if not TCP or UDP (for example ICMP protocol)
@@ -159,6 +258,7 @@ class SimpleSwitch13(app_manager.RyuApp):
                                             tcp_src=tcp_p.src_port,
                                             tcp_dst=tcp_p.dst_port,
                                             ip_proto=protocol)
+                    idle_timeout = 0
 
                 elif protocol == in_proto.IPPROTO_UDP:
                     udp_p = pkt.get_protocol(udp.udp)
@@ -173,10 +273,14 @@ class SimpleSwitch13(app_manager.RyuApp):
                 # verify if we have a valid buffer_id, if yes avoid to send both
                 # flow_mod & packet_out
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, priority, match, actions, msg.buffer_id, self.CONF.IDLE_TIMEOUT)
-                    return
+                    self.add_flow(datapath, priority, match, actions, msg.buffer_id, idle_timeout)
                 else:
-                    self.add_flow(datapath, priority, match, actions, self.CONF.IDLE_TIMEOUT)
+                    self.add_flow(datapath, priority, match, actions, idle_timeout)
+
+    @staticmethod
+    def forward_packet(datapath, msg, in_port, actions):
+        ofproto = datapath.ofproto
+        parser = datapath.ofproto_parser
 
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
@@ -187,3 +291,37 @@ class SimpleSwitch13(app_manager.RyuApp):
         out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                                   match=match, actions=actions, data=data)
         datapath.send_msg(out)
+
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+    def _packet_in_handler(self, ev):
+        # If you hit this you might want to increase
+        # the "miss_send_length" of your switch
+        if ev.msg.msg_len < ev.msg.total_len:
+            self.logger.debug("packet truncated: only %s of %s bytes",
+                              ev.msg.msg_len, ev.msg.total_len)
+        msg = ev.msg
+
+        datapath = msg.datapath
+        parser = datapath.ofproto_parser
+
+        pkt = packet.Packet(msg.data)
+        eth = pkt.get_protocols(ethernet.ethernet)[0]
+
+        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
+            # ignore lldp packet
+            return
+
+        in_port, out_port = self.ethernet_processing(datapath, msg, eth)
+
+        actions = [parser.OFPActionOutput(out_port)]
+
+        if self.is_tcp_flags_packet(pkt, eth):
+            self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
+        else:
+            self.install_flow(datapath, msg, pkt, eth, out_port, actions)
+
+        self.forward_packet(datapath, msg, in_port, actions)
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def flow_removal_handler(self, ev):
+        print("Removed")

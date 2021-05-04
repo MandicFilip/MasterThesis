@@ -19,24 +19,17 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_5
-from ryu.lib.packet import packet
-from ryu.lib.packet import ethernet
-from ryu.lib.packet import ether_types
 from ryu.lib.packet import in_proto
-from ryu.lib.packet import ipv4
-from ryu.lib.packet import tcp
-from ryu.lib.packet import udp
 from ryu.lib import hub
 from ryu import cfg
 
-import DataTable
+from dataryu.FlowDataTable import FlowDataTable
+from dataryu.DataStorage import save_flows, init_storage
 
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
 
-
-# TCP_UDP_PRIORITY_LEVEL = 2
 
 def ofmatch_to_map(match):
     match_map = {'protocol_code': match['ip_proto'], 'ipv4_src': match['ipv4_src'], 'ipv4_dst': match['ipv4_dst']}
@@ -70,13 +63,13 @@ class StatsCollector(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(StatsCollector, self).__init__(*args, **kwargs)
-        self.mac_to_port = {}
         self.CONF = cfg.CONF
         self.CONF.register_opts([cfg.IntOpt('INTERVAL', default=10, help='Interval for collecting stats')])
         self.logger.info("Interval: %d seconds", self.CONF.INTERVAL)
         self.datapath = None
-        self.monitor_thread = hub.spawn(self.run)
-        self.dataTable = DataTable.DataTable()
+        self.stats_thread = hub.spawn(self.run)
+        self.dataTable = FlowDataTable()
+        init_storage(self.CONF.INTERVAL)
 
     def run(self):
         print("Collection start")
@@ -93,7 +86,11 @@ class StatsCollector(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
-        pass
+        flow_data = ofmatch_to_map(ev.msg.match)
+        flow_data['byte_count'] = ev.msg.stats['byte_count']
+        flow_data['packet_count'] = ev.msg.stats['packet_count']
+
+        self.dataTable.finish_flow(flow_data)
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
@@ -104,4 +101,7 @@ class StatsCollector(app_manager.RyuApp):
 
         self.dataTable.update_data(new_data)
 
-        # process data
+        # TODO process data for active and finished flows
+
+        save_flows(self.dataTable.finished_flows)
+        self.dataTable.clear_finished_flows()

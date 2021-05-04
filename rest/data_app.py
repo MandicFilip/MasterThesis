@@ -1,8 +1,8 @@
 import threading
 import sys
 import time
-from data_collector import get_data
-from DataTable import DataTable
+from rest.data_collector import get_data
+from dataryu.FlowDataTable import FlowDataTable
 
 
 def process_data(data):
@@ -10,7 +10,7 @@ def process_data(data):
 
 
 def handler(sleep_interval, url):
-    data = DataTable()
+    data = FlowDataTable()
 
     while True:
         success = get_data(url, data)
