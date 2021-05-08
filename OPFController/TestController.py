@@ -61,7 +61,7 @@ class SwitchController(app_manager.RyuApp):
         self.add_flow(datapath, 0, match, actions)
 
         # install tcp flags flow entry
-        match = parser.OFPMatch(eth_type=0x0800, ip_proto=6, tcp_flags=(0x001 | 0x004))
+        match = parser.OFPMatch(eth_type=0x0800, ip_proto=6, tcp_flags=0x001)
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         self.add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
@@ -132,7 +132,7 @@ class SwitchController(app_manager.RyuApp):
         tcp_p = pkt.get_protocol(tcp.tcp)
         tcp_flags = tcp_p.bits
 
-        if tcp_flags & 0x1 or tcp_flags & 0x4:
+        if tcp_flags & 0x1:
             return True
 
         return False

@@ -25,6 +25,105 @@ from ryu import cfg
 import os
 from datetime import datetime
 from operator import itemgetter
+import shlex, subprocess
+import threading
+
+ICMP_PRIORITY_LEVEL = 1
+TCP_UDP_PRIORITY_LEVEL = 2
+TCP_FLAGS_PRIORITY_LEVEL = 3
+
+TCP_CODE = 6
+UDP_CODE = 17
+
+
+# -------------------------------------------------PROCESS FLOW DATA----------------------------------------------------
+
+
+def process_assignment(assignment, flow):
+    map_pair = assignment.split('=')
+
+    if map_pair[0] == 'duration':
+        flow[map_pair[0]] = map_pair[1]
+    if map_pair[0] == 'priority':
+        flow[map_pair[0]] = int(map_pair[1])
+    if map_pair[0] == 'n_packets':
+        flow['packet_count'] = int(map_pair[1])
+    if map_pair[0] == 'n_bytes':
+        flow['byte_count'] = int(map_pair[1])
+    if map_pair[0] == 'nw_src':
+        flow['ip_src'] = map_pair[1]
+    if map_pair[0] == 'nw_dst':
+        flow['ip_dst'] = map_pair[1]
+    if map_pair[0] == 'tp_src':
+        flow['port_src'] = int(map_pair[1])
+    if map_pair[0] == 'tp_dst':
+        flow['port_dst'] = int(map_pair[1])
+
+    return flow
+
+
+def process_part(part, flow):
+    if '=' in part:
+        flow = process_assignment(part, flow)
+    elif part == 'tcp':
+        flow['protocol_code'] = TCP_CODE
+    elif part == 'udp':
+        flow['protocol_code'] = UDP_CODE
+
+    return flow
+
+
+def process_line(line):
+    flow = {'priority': 0}
+    values = line.split(', ')
+
+    for value in values:
+        if ' ' in value:
+            space_separated_data = value.split(' ')
+            for data in space_separated_data:
+                if ',' in data:
+                    parts = data.split(',')
+                    for part in parts:
+                        flow = process_part(part, flow)
+                else:
+                    process_part(data, flow)
+        else:
+            process_part(value, flow)
+
+    return flow
+
+
+def process_flow_data(output):
+    lines = output.split('\n')
+    data = []
+
+    for line in lines:
+        flow_info = process_line(line)
+
+        if flow_info['priority'] == TCP_UDP_PRIORITY_LEVEL:
+            data.append(flow_info)
+
+    data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
+
+    return data
+
+
+def extract_match_data(match):
+    print(match)
+
+    match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
+
+    if match['ip_proto'] == in_proto.IPPROTO_TCP:
+        match_map['port_src'] = match['tcp_src']
+        match_map['port_dst'] = match['tcp_dst']
+    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
+        match_map['port_src'] = match['udp_src']
+        match_map['port_dst'] = match['udp_dst']
+    else:
+        return None
+
+    return match_map
+
 
 # -------------------------------------------------FLOW INFO------------------------------------------------------------
 
@@ -56,6 +155,9 @@ class FlowInfo:
         return 'Not Supported'
 
     def compare_match_to_entry(self, match):
+        if not match.has_key('ip_src'):
+            print("No key")
+            print(match)
         if self.ip_src != match['ip_src']:
             if self.ip_src < match['ip_src']:
                 return 1
@@ -89,6 +191,7 @@ class FlowInfo:
         self.total_packet_count = packet_count
         self.byte_count_list.append(diff_byte_count)
         self.packet_count_list.append(diff_packet_count)
+
 
 # -------------------------------------------------DATA TABLE-----------------------------------------------------------
 
@@ -173,6 +276,7 @@ class FlowDataTable:
         self.finished_flows.clear()
         pass
 
+
 # -------------------------------------------------DATA STORAGE---------------------------------------------------------
 
 
@@ -226,7 +330,6 @@ def save_to_file(finished_flows, file):
 
 
 def save_flows(finished_flows):
-
     if not os.path.exists(file_name):
         print("Error with file")
         return False
@@ -239,39 +342,8 @@ def save_flows(finished_flows):
         print("Error saving finished flows")
         return False
 
+
 # -------------------------------------------------STATS CONTROLLER-----------------------------------------------------
-
-
-ICMP_PRIORITY_LEVEL = 1
-TCP_UDP_PRIORITY_LEVEL = 2
-TCP_FLAGS_PRIORITY_LEVEL = 3
-
-
-def ofmatch_to_map(match):
-    match_map = {'protocol_code': match['ip_proto'], 'ipv4_src': match['ipv4_src'], 'ipv4_dst': match['ipv4_dst']}
-
-    if match['ip_proto'] == in_proto.IPPROTO_TCP:
-        match_map['src_port'] = match['tcp_src']
-        match_map['dst_port'] = match['tcp_dst']
-    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
-        match_map['src_port'] = match['udp_src']
-        match_map['dst_port'] = match['udp_dst']
-
-    return match_map
-
-
-def prepare_new_data(body):
-    new_data = []
-    for flow in body:
-        if flow.priority == TCP_UDP_PRIORITY_LEVEL:
-            flow_data = ofmatch_to_map(flow.match)
-            flow_data['byte_count'] = flow.byte_count
-            flow_data['packet_count'] = flow.packet_count
-            new_data.append(flow_data)
-
-    new_data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
-
-    return new_data
 
 
 class StatsCollector(app_manager.RyuApp):
@@ -285,6 +357,7 @@ class StatsCollector(app_manager.RyuApp):
         self.datapath = None
         self.dataTable = FlowDataTable()
         init_storage(self.CONF.INTERVAL)
+        self.lock = threading.Lock()
         self.stats_thread = hub.spawn(self.run)
 
     def run(self):
@@ -293,9 +366,31 @@ class StatsCollector(app_manager.RyuApp):
         while True:
             if self.datapath is not None:
                 parser = self.datapath.ofproto_parser
-                req = parser.OFPFlowStatsRequest(self.datapath)
+                req = parser.OFPDescStatsRequest(self.datapath, 0)
                 self.datapath.send_msg(req)
+
+                # TODO counting for saving data to file
+
             hub.sleep(self.CONF.INTERVAL)
+
+    def retrieve_data_with_command(self):
+        command = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
+        try:
+            args = shlex.split(command)
+            output = subprocess.check_output(args, stderr=subprocess.STDOUT)
+
+            data = process_flow_data(output)
+            print(data)
+
+            self.dataTable.update_data(data)
+
+            # TODO process data for active and finished flows (done flag)
+
+            # save_flows(self.dataTable.finished_flows)
+            # self.dataTable.clear_finished_flows()
+
+        except subprocess.CalledProcessError as err:
+            print("Error: " + str(err))
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -303,22 +398,14 @@ class StatsCollector(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
-        flow_data = ofmatch_to_map(ev.msg.match)
-        flow_data['byte_count'] = ev.msg.stats['byte_count']
-        flow_data['packet_count'] = ev.msg.stats['packet_count']
+        flow_data = extract_match_data(ev.msg.match)
 
-        self.dataTable.finish_flow(flow_data)
+        if flow_data is not None:
+            flow_data['byte_count'] = ev.msg.stats['byte_count']
+            flow_data['packet_count'] = ev.msg.stats['packet_count']
 
-    @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
+            self.dataTable.finish_flow(flow_data)
+
+    @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
-        body = ev.msg.body
-
-        # filter, reformat and sort new data
-        new_data = prepare_new_data(body)
-
-        self.dataTable.update_data(new_data)
-
-        # TODO process data for active and finished flows
-
-        save_flows(self.dataTable.finished_flows)
-        self.dataTable.clear_finished_flows()
+        self.retrieve_data_with_command()
