@@ -1,6 +1,7 @@
+import statistics
+
 
 class FlowInfo:
-
     def __init__(self, start_interval, data):
         self.start_interval = start_interval
         self.finished = False
@@ -17,6 +18,18 @@ class FlowInfo:
 
         self.byte_count_list.append(data['byte_count'])
         self.packet_count_list.append(data['packet_count'])
+
+        self.byte_mean = 0
+        self.packet_mean = 0
+
+        self.byte_median = 0
+        self.packet_median = 0
+
+        self.byte_mode = 0
+        self.packet_mode = 0
+
+        self.byte_standard_deviation = 0
+        self.packet_standard_deviation = 0
 
     def get_protocol_name(self):
         if self.protocol_code == 6:
@@ -59,3 +72,30 @@ class FlowInfo:
         self.total_packet_count = packet_count
         self.byte_count_list.append(diff_byte_count)
         self.packet_count_list.append(diff_packet_count)
+
+    def calc_mean(self):
+        self.byte_mean = statistics.mean(self.byte_count_list)
+        self.packet_mean = statistics.mean(self.packet_count_list)
+
+    def calc_median(self):
+        self.byte_median = statistics.median(self.byte_count_list)
+        self.packet_median = statistics.median(self.packet_count_list)
+
+    def calc_mode(self):
+        self.byte_mode = statistics.mode(self.byte_count_list)
+        self.packet_mode = statistics.mode(self.packet_count_list)
+
+    def calc_standard_deviation(self):
+        self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
+        self.packet_standard_deviation = statistics.stdev(self.packet_count_list)
+
+    def calc_correlation(self):
+        pass
+
+    def calc_skew(self):
+        pass
+
+    def calc_kurtosis(self):
+        pass
+
+

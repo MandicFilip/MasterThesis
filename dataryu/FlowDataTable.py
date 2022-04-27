@@ -12,7 +12,6 @@ def get_dict_match(data):
 
 
 class FlowDataTable:
-
     def __init__(self):
         self.active_flows = []
         self.finished_flows = []
@@ -79,4 +78,8 @@ class FlowDataTable:
 
     def clear_finished_flows(self):
         self.finished_flows.clear()
+        pass
+
+    # copy to FullStatsApp
+    def calc_stats(self):
         pass

@@ -52,9 +52,7 @@ def prepare_new_data(body):
             flow_data['byte_count'] = flow.byte_count
             flow_data['packet_count'] = flow.packet_count
             new_data.append(flow_data)
-
     new_data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
-
     return new_data
 
 
@@ -98,7 +96,6 @@ class StatsCollector(app_manager.RyuApp):
 
         # filter, reformat and sort new data
         new_data = prepare_new_data(body)
-
         self.dataTable.update_data(new_data)
 
         # TODO process data for active and finished flows

@@ -28,6 +28,7 @@ from ryu.lib.packet import udp
 from ryu import cfg
 from ryu.lib import hub
 
+TABLE_MISS_PRIORITY_LEVEL = 0
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
@@ -58,9 +59,9 @@ class SwitchController(app_manager.RyuApp):
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        self.add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
 
-        # install tcp flags flow entry
+        # install tcp flags flow entry - we need packet with flags for tcp session end to remove flow from table
         match = parser.OFPMatch(eth_type=0x0800, ip_proto=6, tcp_flags=(0x001 | 0x004))
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
@@ -72,7 +73,8 @@ class SwitchController(app_manager.RyuApp):
         parser = datapath.ofproto_parser
 
         inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        cookie = cookie_mask = 0
+        cookie = 0
+        cookie_mask = 0
         table_id = 0
         hard_timeout = 0
         importance = 0
@@ -161,6 +163,7 @@ class SwitchController(app_manager.RyuApp):
         if buffer_id == ofproto.OFP_NO_BUFFER:
             buffer_id = None
 
+        # Give some time for peers to finish communication and then remove flow from table
         hub.spawn(self.delete_tcp_flow_pair, datapath, match1, match2, actions, buffer_id)
 
     def delete_tcp_flow_pair(self, datapath, match1, match2, actions, buffer_id=None):
@@ -188,7 +191,8 @@ class SwitchController(app_manager.RyuApp):
                                 hard_timeout,
                                 priority,
                                 buffer_id,
-                                ofproto.OFPP_ANY, ofproto.OFPG_ANY,
+                                ofproto.OFPP_ANY,
+                                ofproto.OFPG_ANY,
                                 ofproto.OFPFF_SEND_FLOW_REM,
                                 importance,
                                 match1,
@@ -217,46 +221,46 @@ class SwitchController(app_manager.RyuApp):
 
         # install a flow to avoid packet_in next time
         if out_port != ofproto.OFPP_FLOOD:
-
             # check if it is IP
             if eth.ethertype == ether_types.ETH_TYPE_IP:
                 ip = pkt.get_protocol(ipv4.ipv4)
                 protocol = ip.proto
 
                 match = parser.OFPMatch()
-                idle_timeout = self.CONF.IDLE_TIMEOUT
+                idle_timeout = 0
+                priority = 0
 
-                priority = ICMP_PRIORITY_LEVEL
                 # Match if not TCP or UDP (for example ICMP protocol)
                 if (protocol != in_proto.IPPROTO_TCP) and (protocol != in_proto.IPPROTO_UDP):
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip.src, ipv4_dst=ip.dst,
                                             ip_proto=protocol)
-
+                    priority = ICMP_PRIORITY_LEVEL
+                    idle_timeout = self.CONF.IDLE_TIMEOUT
                 elif protocol == in_proto.IPPROTO_TCP:
                     tcp_p = pkt.get_protocol(tcp.tcp)
-                    priority = TCP_UDP_PRIORITY_LEVEL
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                             ipv4_src=ip.src,
                                             ipv4_dst=ip.dst,
                                             tcp_src=tcp_p.src_port,
                                             tcp_dst=tcp_p.dst_port,
                                             ip_proto=protocol)
+                    priority = TCP_UDP_PRIORITY_LEVEL
                     idle_timeout = 0
-
                 elif protocol == in_proto.IPPROTO_UDP:
                     udp_p = pkt.get_protocol(udp.udp)
-                    priority = TCP_UDP_PRIORITY_LEVEL
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                             ipv4_src=ip.src,
                                             ipv4_dst=ip.dst,
                                             udp_src=udp_p.src_port,
                                             udp_dst=udp_p.dst_port,
                                             ip_proto=protocol)
+                    priority = TCP_UDP_PRIORITY_LEVEL
+                    idle_timeout = self.CONF.IDLE_TIMEOUT
 
                 # verify if we have a valid buffer_id, if yes avoid to send both
                 # flow_mod & packet_out
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, priority, match, actions, msg.buffer_id, idle_timeout)
+                    self.add_flow(datapath, priority, match, actions, idle_timeout, msg.buffer_id)
                 else:
                     self.add_flow(datapath, priority, match, actions, idle_timeout)
 
@@ -283,13 +287,11 @@ class SwitchController(app_manager.RyuApp):
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
-
         datapath = msg.datapath
         parser = datapath.ofproto_parser
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocols(ethernet.ethernet)[0]
-
         if eth.ethertype == ether_types.ETH_TYPE_LLDP:
             # ignore lldp packet
             return

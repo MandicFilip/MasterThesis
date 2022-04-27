@@ -1,0 +1,1 @@
+Koristiti Controller.py i FullStatsApp.py!

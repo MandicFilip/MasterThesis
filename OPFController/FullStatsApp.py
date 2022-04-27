@@ -21,12 +21,13 @@ from ryu.ofproto import ofproto_v1_5
 from ryu.lib.packet import in_proto
 from ryu.lib import hub
 from ryu import cfg
+import statistics
+import scipy
 
 import os
 from datetime import datetime
 from operator import itemgetter
 import shlex, subprocess
-import threading
 
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
@@ -35,6 +36,7 @@ TCP_FLAGS_PRIORITY_LEVEL = 3
 TCP_CODE = 6
 UDP_CODE = 17
 
+MIN_LENGTH = 3
 
 # -------------------------------------------------PROCESS FLOW DATA----------------------------------------------------
 
@@ -129,7 +131,6 @@ def extract_match_data(match):
 
 
 class FlowInfo:
-
     def __init__(self, start_interval, data):
         self.start_interval = start_interval
         self.finished = False
@@ -140,12 +141,57 @@ class FlowInfo:
         self.protocol_code = data['protocol_code']
         self.total_byte_count = data['byte_count']
         self.total_packet_count = data['packet_count']
+        self.duration = data['duration']
 
-        self.byte_count_list = [int]
-        self.packet_count_list = [int]
+        self.byte_count_list = []
+        self.packet_count_list = []
 
         self.byte_count_list.append(data['byte_count'])
         self.packet_count_list.append(data['packet_count'])
+
+        self.byte_mean = 0
+        self.packet_mean = 0
+
+        self.byte_median = 0
+        self.packet_median = 0
+
+        self.byte_mode = 0
+        self.packet_mode = 0
+
+        self.byte_standard_deviation = 0
+        self.packet_standard_deviation = 0
+
+        self.byte_fisher_skew = 0
+        self.packet_fisher_skew = 0
+
+        self.byte_fisher_kurtosis = 0
+        self.packet_fisher_kurtosis = 0
+
+        self.pair_flow = None
+        self.byte_correlation = 0
+        self.packet_correlation = 0
+
+    def recalculate_stats(self):
+        if len(self.byte_count_list) > MIN_LENGTH:
+            self.calc_mean()
+            self.calc_median()
+            self.calc_mode()
+            self.calc_standard_deviation()
+            self.calc_skew()
+            self.calc_kurtosis()
+
+            if len(self.byte_count_list) != len(self.pair_flow.byte_count_list):
+                self.match_flow_lengths_with_pair()
+            self.calc_correlation()
+
+    def is_pair_flow_set(self):
+        return self.pair_flow is not None
+
+    def set_pair_flow(self, pair):
+        self.pair_flow = pair
+
+    def change_duration(self, duration):
+        self.duration = duration
 
     def get_protocol_name(self):
         if self.protocol_code == 6:
@@ -155,9 +201,6 @@ class FlowInfo:
         return 'Not Supported'
 
     def compare_match_to_entry(self, match):
-        if not match.has_key('ip_src'):
-            print("No key")
-            print(match)
         if self.ip_src != match['ip_src']:
             if self.ip_src < match['ip_src']:
                 return 1
@@ -192,6 +235,42 @@ class FlowInfo:
         self.byte_count_list.append(diff_byte_count)
         self.packet_count_list.append(diff_packet_count)
 
+    def calc_mean(self):
+        self.byte_mean = statistics.mean(self.byte_count_list)
+        self.packet_mean = statistics.mean(self.packet_count_list)
+
+    def calc_median(self):
+        self.byte_median = statistics.median(self.byte_count_list)
+        self.packet_median = statistics.median(self.packet_count_list)
+
+    def calc_mode(self):
+        self.byte_mode = statistics.mode(self.byte_count_list)
+        self.packet_mode = statistics.mode(self.packet_count_list)
+
+    def calc_standard_deviation(self):
+        self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
+        self.packet_standard_deviation = statistics.stdev(self.packet_count_list)
+
+    def calc_skew(self):
+        self.byte_fisher_skew = scipy.stats.skew(self.byte_count_list)
+        self.packet_fisher_skew = scipy.stats.skew(self.packet_count_list)
+
+    def calc_kurtosis(self):
+        self.byte_fisher_kurtosis = scipy.stats.kurtosis(self.byte_count_list)
+        self.packet_fisher_kurtosis = scipy.stats.kurtosis(self.packet_count_list)
+
+    def calc_correlation(self):
+        if self.pair_flow is not None:
+            self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, self.pair_flow.byte_count_list)
+            self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, self.pair_flow.packet_count_list)
+
+    def match_flow_lengths_with_pair(self):
+        if len(self.byte_count_list) < len(self.pair_flow.byte_count_list):
+            self.byte_count_list.insert(0, 0)
+            self.packet_count_list.insert(0, 0)
+        else:
+            self.pair_flow.byte_count_list.insert(0, 0)
+            self.pair_flow.packet_count_list.insert(0, 0)
 
 # -------------------------------------------------DATA TABLE-----------------------------------------------------------
 
@@ -207,7 +286,6 @@ def get_dict_match(data):
 
 
 class FlowDataTable:
-
     def __init__(self):
         self.active_flows = []
         self.finished_flows = []
@@ -232,9 +310,11 @@ class FlowDataTable:
                 i = i + 1
                 j = j + 1
             elif value > 0:
+                # finished flow, no input for it
                 j = j + 1
             else:
                 self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
+                self.active_flows[j].change_duration(sorted_data[i]['duration'])
                 i = i + 1
                 j = j + 1
 
@@ -260,21 +340,40 @@ class FlowDataTable:
                 low = mid + 1
         return -1
 
+    def find_active_pair_for_flow(self, flow):
+        key = flow
+        key['ip_src'] = flow['ip_dst']
+        key['ip_dst'] = flow['ip_src']
+        key['port_src'] = flow['port_dst']
+        key['port_dst'] = flow['port_src']
+        key['protocol_code'] = flow['protocol_code']
+        index = self.find_active_flow(key)
+        if index != -1:
+            return self.active_flows[index]
+        return None
+
     def finish_flow(self, finished_flow_data):
         index = self.find_active_flow(finished_flow_data)
 
-        if index == -1:
-            # flow not in table
-            entry = FlowInfo(self.interval, finished_flow_data)
-            self.finished_flows.append(entry)
-        else:
+        if index != -1:
             flow = self.active_flows.pop(index)
             flow.update_counters(finished_flow_data['byte_count'], finished_flow_data['packet_count'])
+            flow.change_duration(finished_flow_data['duration'])
             self.finished_flows.append(flow)
 
     def clear_finished_flows(self):
         self.finished_flows.clear()
         pass
+
+    def calc_stats(self):
+        for flow in self.active_flows:
+            if not flow.is_pair_flow_set():
+                pair = self.find_active_pair_for_flow(flow)
+                if pair is not None:
+                    flow.set_pair_flow(pair)
+            flow.recalculate_stats()
+
+        print("Stats done")
 
 
 # -------------------------------------------------DATA STORAGE---------------------------------------------------------
@@ -357,7 +456,6 @@ class StatsCollector(app_manager.RyuApp):
         self.datapath = None
         self.dataTable = FlowDataTable()
         init_storage(self.CONF.INTERVAL)
-        self.lock = threading.Lock()
         self.stats_thread = hub.spawn(self.run)
 
     def run(self):
@@ -373,28 +471,31 @@ class StatsCollector(app_manager.RyuApp):
 
             hub.sleep(self.CONF.INTERVAL)
 
-    def retrieve_data_with_command(self):
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        self.datapath = ev.msg.datapath
+
+    @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
+    def _flow_stats_reply_handler(self, ev):
         command = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
         try:
             args = shlex.split(command)
             output = subprocess.check_output(args, stderr=subprocess.STDOUT)
 
             data = process_flow_data(output)
-            print(data)
 
             self.dataTable.update_data(data)
-
+            self.dataTable.calc_stats()
             # TODO process data for active and finished flows (done flag)
 
+            print(self.dataTable.active_flows)
+            print(self.dataTable.finished_flows)
             # save_flows(self.dataTable.finished_flows)
             # self.dataTable.clear_finished_flows()
 
         except subprocess.CalledProcessError as err:
-            print("Error: " + str(err))
-
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
-    def switch_features_handler(self, ev):
-        self.datapath = ev.msg.datapath
+            self.logger.info("Error collecting data")
+            self.logger.debug(err)
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
@@ -403,9 +504,6 @@ class StatsCollector(app_manager.RyuApp):
         if flow_data is not None:
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
+            flow_data['duration'] = ev.msg.stats['duration']
 
             self.dataTable.finish_flow(flow_data)
-
-    @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
-    def _flow_stats_reply_handler(self, ev):
-        self.retrieve_data_with_command()
