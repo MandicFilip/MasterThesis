@@ -22,7 +22,7 @@ from ryu.lib.packet import in_proto
 from ryu.lib import hub
 from ryu import cfg
 import statistics
-import scipy
+import scipy.stats
 
 import os
 from datetime import datetime
@@ -179,10 +179,10 @@ class FlowInfo:
             self.calc_standard_deviation()
             self.calc_skew()
             self.calc_kurtosis()
-
-            if len(self.byte_count_list) != len(self.pair_flow.byte_count_list):
-                self.match_flow_lengths_with_pair()
-            self.calc_correlation()
+            if self.pair_flow is not None:
+                if len(self.byte_count_list) != len(self.pair_flow.byte_count_list):
+                    self.match_flow_lengths_with_pair()
+                self.calc_correlation()
 
     def is_pair_flow_set(self):
         return self.pair_flow is not None
@@ -260,9 +260,8 @@ class FlowInfo:
         self.packet_fisher_kurtosis = scipy.stats.kurtosis(self.packet_count_list)
 
     def calc_correlation(self):
-        if self.pair_flow is not None:
-            self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, self.pair_flow.byte_count_list)
-            self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, self.pair_flow.packet_count_list)
+        self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, self.pair_flow.byte_count_list)
+        self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, self.pair_flow.packet_count_list)
 
     def match_flow_lengths_with_pair(self):
         if len(self.byte_count_list) < len(self.pair_flow.byte_count_list):
@@ -290,12 +289,6 @@ class FlowDataTable:
         self.active_flows = []
         self.finished_flows = []
         self.interval = 0
-
-    def fill_zeros(self):
-        for flow in self.active_flows:
-            print(flow)
-            flow.update_counters(0, 0)
-        self.interval = self.interval + 1
 
     def update_data(self, sorted_data):
         i = 0
@@ -325,7 +318,7 @@ class FlowDataTable:
 
         self.interval = self.interval + 1
 
-    def find_active_flow(self, key):
+    def find_flow(self, key):
         low = 0
         high = len(self.active_flows) - 1
         while low <= high:
@@ -340,101 +333,147 @@ class FlowDataTable:
                 low = mid + 1
         return -1
 
-    def find_active_pair_for_flow(self, flow):
-        key = flow
-        key['ip_src'] = flow['ip_dst']
-        key['ip_dst'] = flow['ip_src']
-        key['port_src'] = flow['port_dst']
-        key['port_dst'] = flow['port_src']
-        key['protocol_code'] = flow['protocol_code']
-        index = self.find_active_flow(key)
+    def find_pair_for_flow(self, flow):
+        key = {}
+        key['ip_src'] = flow.ip_dst
+        key['ip_dst'] = flow.ip_src
+        key['port_src'] = flow.port_dst
+        key['port_dst'] = flow.port_src
+        key['protocol_code'] = flow.protocol_code
+        index = self.find_flow(key)
         if index != -1:
             return self.active_flows[index]
         return None
 
-    def finish_flow(self, finished_flow_data):
-        index = self.find_active_flow(finished_flow_data)
+    def update_finished_flow(self, finished_flow_data):
+        index = self.find_flow(finished_flow_data)
 
         if index != -1:
-            flow = self.active_flows.pop(index)
+            flow = self.active_flows[index]
             flow.update_counters(finished_flow_data['byte_count'], finished_flow_data['packet_count'])
             flow.change_duration(finished_flow_data['duration'])
-            self.finished_flows.append(flow)
+            flow.finished = True
+        else:
+            print('Can not find finished flow')
 
     def clear_finished_flows(self):
-        self.finished_flows.clear()
+        self.finished_flows[:] = []
         pass
 
     def calc_stats(self):
         for flow in self.active_flows:
             if not flow.is_pair_flow_set():
-                pair = self.find_active_pair_for_flow(flow)
+                pair = self.find_pair_for_flow(flow)
                 if pair is not None:
                     flow.set_pair_flow(pair)
             flow.recalculate_stats()
 
         print("Stats done")
 
+    def separate_finished_flows(self):
+        i = 0
+        while i < len(self.active_flows):
+            if self.active_flows[i].finished:
+                flow = self.active_flows.pop(i)
+                self.finished_flows.append(flow)
+            else:
+                i = i + 1
 
 # -------------------------------------------------DATA STORAGE---------------------------------------------------------
 
 
-file_name = "finished_flows.info"
+def stringify_statistics(flow):
+    stats = ""
+    stats = stats + str(flow.byte_mean) + " "
+    stats = stats + str(flow.byte_median) + " "
+    stats = stats + str(flow.byte_mode) + " "
+    stats = stats + str(flow.byte_standard_deviation) + " "
+    stats = stats + str(flow.byte_fisher_skew) + " "
+    stats = stats + str(flow.byte_fisher_kurtosis) + " "
+    stats = stats + str(flow.byte_correlation) + "\n"
 
-
-def init_storage(interval_length):
-    if os.path.exists(file_name):
-        os.remove(file_name)
-
-    try:
-        file = open(file_name, "w+")
-
-        now = datetime.now()
-        current_time = now.strftime("%H:%M:%S")
-        file.write(current_time + "\n")
-
-        file.write("Interval length: " + str(interval_length) + "\n\n")
-
-        file.close()
-    except IOError:
-        print("Error opening file!")
-    pass
+    stats = stats + str(flow.packet_mean) + " "
+    stats = stats + str(flow.packet_median) + " "
+    stats = stats + str(flow.packet_mode) + " "
+    stats = stats + str(flow.packet_standard_deviation) + " "
+    stats = stats + str(flow.packet_fisher_skew) + " "
+    stats = stats + str(flow.packet_fisher_kurtosis) + " "
+    stats = stats + str(flow.packet_correlation) + "\n"
+    return stats
 
 
 def format_flow_info(flow):
     flow_string = ""
-    flow_string = flow_string + flow.ip_src + " "
-    flow_string = flow_string + flow.ip_dst + " "
-    flow_string = flow_string + flow.port_src + " "
-    flow_string = flow_string + flow.port_dst + " "
-    flow_string = flow_string + flow.protocol_code + " "
+    flow_string = flow_string + str(flow.ip_src) + " "
+    flow_string = flow_string + str(flow.ip_dst) + " "
+    flow_string = flow_string + str(flow.port_src) + " "
+    flow_string = flow_string + str(flow.port_dst) + " "
+    flow_string = flow_string + str(flow.protocol_code) + "\n"
 
-    flow_string = flow_string + "\n"
+    flow_string = flow_string + str(flow.total_byte_count) + " "
+    flow_string = flow_string + str(flow.total_packet_count) + "\n"
 
-    flow_string = flow_string + flow.total_byte_count + " " + flow.total_packet_count + "\n"
+    flow_string = flow_string + str(flow.byte_count_list) + "\n"
+    flow_string = flow_string + str(flow.packet_count_list) + "\n"
 
-    flow_string = flow_string + flow_string(flow.byte_count_list) + "\n"
-    flow_string = flow_string + flow_string(flow.packet_count_list) + "\n"
-
-    # TODO save stats when calculated
-
+    flow_string = flow_string + stringify_statistics(flow) + "\n"
     return flow_string
 
 
-def save_to_file(finished_flows, file):
-    for flow in finished_flows:
-        flow_string = format_flow_info(flow)
-        file.write(flow_string)
-        file.write("\n")
+def init_file(file, time, collect_interval, save_interval):
+    if os.path.exists(file):
+        os.remove(file)
+    try:
+        file = open(file, "w+")
+        file.write('Start time: ' + time + "\n")
+        file.write('Collect Interval: ' + str(collect_interval) + '\n')
+        file.write('Save Interval: ' + str(save_interval) + '\n\n')
+        file.close()
+    except IOError:
+        print("Error opening file: " + file)
 
 
-def save_flows(finished_flows):
-    if not os.path.exists(file_name):
-        print("Error with file")
+def init_finished_flows_storage(collect_interval, save_interval, finished_flows_file):
+    now = datetime.now()
+    current_time = now.strftime("%H:%M:%S")
+    if os.path.exists(finished_flows_file):
+        os.remove(finished_flows_file)
+    try:
+        file = open(finished_flows_file, "w+")
+        file.write('Start time: ' + current_time + "\n")
+        file.write('Collect Interval: ' + str(collect_interval) + '\n')
+        file.write('Save Interval: ' + str(save_interval) + '\n\n')
+        file.close()
+    except IOError:
+        print("Error opening file: " + finished_flows_file)
+
+
+def save_active_flows(file, flows):
+    if os.path.exists(file):
+        os.remove(file)
+    try:
+        file = open(file, "w+")
+        for flow in flows:
+            flow_string = format_flow_info(flow)
+            file.write(flow_string)
+            file.write("\n")
+
+        file.close()
+    except IOError:
+        print("Error opening file: " + file)
+
+
+def save_finished_flows(file, flows):
+    if not os.path.exists(file):
+        print("File does not exist!")
         return False
     try:
-        file = open(file_name, "a")
-        save_to_file(finished_flows, file)
+        file = open(file, "a")
+        for flow in flows:
+            flow_string = format_flow_info(flow)
+            file.write(flow_string)
+            file.write("\n")
+
         file.close()
         return True
     except IOError:
@@ -443,6 +482,14 @@ def save_flows(finished_flows):
 
 
 # -------------------------------------------------STATS CONTROLLER-----------------------------------------------------
+GET_STATISTICS_COMMAND = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
+
+
+def get_statistics():
+    args = shlex.split(GET_STATISTICS_COMMAND)
+    output = subprocess.check_output(args, stderr=subprocess.STDOUT)
+
+    return process_flow_data(output)
 
 
 class StatsCollector(app_manager.RyuApp):
@@ -451,25 +498,27 @@ class StatsCollector(app_manager.RyuApp):
     def __init__(self, *args, **kwargs):
         super(StatsCollector, self).__init__(*args, **kwargs)
         self.CONF = cfg.CONF
-        self.CONF.register_opts([cfg.IntOpt('INTERVAL', default=10, help='Interval for collecting stats')])
-        self.logger.info("Interval: %d seconds", self.CONF.INTERVAL)
+        self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
+        self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
+        self.CONF.register_opts([cfg.StrOpt('ACTIVE_FLOWS_FILE', default='active_flows.info', help='active flows')])
+        self.CONF.register_opts([cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
+        self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
+        self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
         self.datapath = None
         self.dataTable = FlowDataTable()
-        init_storage(self.CONF.INTERVAL)
         self.stats_thread = hub.spawn(self.run)
+        self.save_counter = 0
+        init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
 
     def run(self):
-        print("Collection start")
-        hub.sleep(self.CONF.INTERVAL)
+        hub.sleep(self.CONF.COLLECT_INTERVAL)
         while True:
             if self.datapath is not None:
                 parser = self.datapath.ofproto_parser
                 req = parser.OFPDescStatsRequest(self.datapath, 0)
                 self.datapath.send_msg(req)
 
-                # TODO counting for saving data to file
-
-            hub.sleep(self.CONF.INTERVAL)
+            hub.sleep(self.CONF.COLLECT_INTERVAL)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -477,21 +526,21 @@ class StatsCollector(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
-        command = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
         try:
-            args = shlex.split(command)
-            output = subprocess.check_output(args, stderr=subprocess.STDOUT)
-
-            data = process_flow_data(output)
-
+            data = get_statistics()
             self.dataTable.update_data(data)
             self.dataTable.calc_stats()
-            # TODO process data for active and finished flows (done flag)
+            self.dataTable.separate_finished_flows()
 
-            print(self.dataTable.active_flows)
-            print(self.dataTable.finished_flows)
-            # save_flows(self.dataTable.finished_flows)
-            # self.dataTable.clear_finished_flows()
+            # print(self.dataTable.active_flows)
+            # print(self.dataTable.finished_flows)
+
+            self.save_counter = self.save_counter + 1
+            if self.save_counter == self.CONF.SAVE_INTERVAL:
+                self.save_counter = 0
+                save_active_flows(self.CONF.ACTIVE_FLOWS_FILE, self.dataTable.active_flows)
+                save_finished_flows(self.CONF.FINISHED_FLOWS_FILE, self.dataTable.finished_flows)
+                self.dataTable.clear_finished_flows()
 
         except subprocess.CalledProcessError as err:
             self.logger.info("Error collecting data")
@@ -501,9 +550,10 @@ class StatsCollector(app_manager.RyuApp):
     def flow_removal_handler(self, ev):
         flow_data = extract_match_data(ev.msg.match)
 
+        # add stats data
         if flow_data is not None:
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
             flow_data['duration'] = ev.msg.stats['duration']
 
-            self.dataTable.finish_flow(flow_data)
+            self.dataTable.update_finished_flow(flow_data)
