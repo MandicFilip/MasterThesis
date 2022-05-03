@@ -7,7 +7,8 @@ init_data_table = [
         'port_dst': 20356,
         'protocol_code': 1,
         'byte_count': 20,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -16,7 +17,8 @@ init_data_table = [
         'port_dst': 21300,
         'protocol_code': 2,
         'byte_count': 250,
-        'packet_count': 32
+        'packet_count': 32,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -25,7 +27,8 @@ init_data_table = [
         'port_dst': 27000,
         'protocol_code': 3,
         'byte_count': 2500,
-        'packet_count': 37
+        'packet_count': 37,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -34,7 +37,8 @@ init_data_table = [
         'port_dst': 29356,
         'protocol_code': 4,
         'byte_count': 202020,
-        'packet_count': 3333
+        'packet_count': 3333,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -43,7 +47,8 @@ init_data_table = [
         'port_dst': 24000,
         'protocol_code': 5,
         'byte_count': 320,
-        'packet_count': 33
+        'packet_count': 33,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -52,7 +57,8 @@ init_data_table = [
         'port_dst': 25050,
         'protocol_code': 6,
         'byte_count': 3454,
-        'packet_count': 202
+        'packet_count': 202,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -61,7 +67,8 @@ init_data_table = [
         'port_dst': 20200,
         'protocol_code': 7,
         'byte_count': 400,
-        'packet_count': 2
+        'packet_count': 2,
+        'duration': 52
     },
     {
         'ip_src': "110.0.0.1",
@@ -70,7 +77,8 @@ init_data_table = [
         'port_dst': 29056,
         'protocol_code': 8,
         'byte_count': 25300,
-        'packet_count': 3222
+        'packet_count': 3222,
+        'duration': 52
     },
     {
         'ip_src': "127.0.0.1",
@@ -79,7 +87,8 @@ init_data_table = [
         'port_dst': 20000,
         'protocol_code': 9,
         'byte_count': 120,
-        'packet_count': 31
+        'packet_count': 31,
+        'duration': 52
     },
     {
         'ip_src': "200.0.0.1",
@@ -88,7 +97,8 @@ init_data_table = [
         'port_dst': 21556,
         'protocol_code': 10,
         'byte_count': 20200,
-        'packet_count': 3000
+        'packet_count': 3000,
+        'duration': 52
     },
 ]
 
@@ -102,7 +112,8 @@ first_update = [
         'port_dst': 22556,
         'protocol_code': 0,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -111,7 +122,8 @@ first_update = [
         'port_dst': 20356,
         'protocol_code': 1,
         'byte_count': 320,
-        'packet_count': 33
+        'packet_count': 33,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -120,7 +132,8 @@ first_update = [
         'port_dst': 21300,
         'protocol_code': 2,
         'byte_count': 550,
-        'packet_count': 35
+        'packet_count': 35,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -129,7 +142,8 @@ first_update = [
         'port_dst': 27000,
         'protocol_code': 3,
         'byte_count': 2800,
-        'packet_count': 40
+        'packet_count': 40,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -138,7 +152,8 @@ first_update = [
         'port_dst': 29356,
         'protocol_code': 4,
         'byte_count': 202320,
-        'packet_count': 3336
+        'packet_count': 3336,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -147,7 +162,8 @@ first_update = [
         'port_dst': 24000,
         'protocol_code': 5,
         'byte_count': 620,
-        'packet_count': 36
+        'packet_count': 36,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -156,7 +172,8 @@ first_update = [
         'port_dst': 25050,
         'protocol_code': 6,
         'byte_count': 3754,
-        'packet_count': 205
+        'packet_count': 205,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -165,7 +182,8 @@ first_update = [
         'port_dst': 20500,
         'protocol_code': 13,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -174,7 +192,8 @@ first_update = [
         'port_dst': 20200,
         'protocol_code': 7,
         'byte_count': 700,
-        'packet_count': 5
+        'packet_count': 5,
+        'duration': 52
     },
     {
         'ip_src': "110.0.0.1",
@@ -183,7 +202,8 @@ first_update = [
         'port_dst': 29056,
         'protocol_code': 8,
         'byte_count': 25600,
-        'packet_count': 3225
+        'packet_count': 3225,
+        'duration': 52
     },
     {
         'ip_src': "127.0.0.1",
@@ -192,7 +212,8 @@ first_update = [
         'port_dst': 20000,
         'protocol_code': 9,
         'byte_count': 420,
-        'packet_count': 34
+        'packet_count': 34,
+        'duration': 52
     },
     {
         'ip_src': "200.0.0.1",
@@ -201,7 +222,8 @@ first_update = [
         'port_dst': 21556,
         'protocol_code': 10,
         'byte_count': 20500,
-        'packet_count': 3003
+        'packet_count': 3003,
+        'duration': 52
     },
     {
         'ip_src': "202.0.0.1",
@@ -210,7 +232,8 @@ first_update = [
         'port_dst': 25556,
         'protocol_code': 11,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "202.0.0.1",
@@ -219,7 +242,8 @@ first_update = [
         'port_dst': 22556,
         'protocol_code': 12,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     }
 ]
 
@@ -233,7 +257,8 @@ first_finished = [
         'port_dst': 22556,
         'protocol_code': 0,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -242,7 +267,8 @@ first_finished = [
         'port_dst': 27000,
         'protocol_code': 3,
         'byte_count': 2800,
-        'packet_count': 40
+        'packet_count': 40,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -251,7 +277,8 @@ first_finished = [
         'port_dst': 20500,
         'protocol_code': 13,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "202.0.0.1",
@@ -260,7 +287,8 @@ first_finished = [
         'port_dst': 25556,
         'protocol_code': 11,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     },
     {
         'ip_src': "202.0.0.1",
@@ -269,7 +297,8 @@ first_finished = [
         'port_dst': 22556,
         'protocol_code': 12,
         'byte_count': 300,
-        'packet_count': 3
+        'packet_count': 3,
+        'duration': 52
     }
 ]
 
@@ -283,7 +312,8 @@ second_update = [
         'port_dst': 20356,
         'protocol_code': 1,
         'byte_count': 360,
-        'packet_count': 37
+        'packet_count': 37,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -292,7 +322,8 @@ second_update = [
         'port_dst': 21300,
         'protocol_code': 2,
         'byte_count': 590,
-        'packet_count': 39
+        'packet_count': 39,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -301,7 +332,8 @@ second_update = [
         'port_dst': 29356,
         'protocol_code': 4,
         'byte_count': 202360,
-        'packet_count': 3340
+        'packet_count': 3340,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -310,7 +342,8 @@ second_update = [
         'port_dst': 24000,
         'protocol_code': 5,
         'byte_count': 660,
-        'packet_count': 40
+        'packet_count': 40,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -319,7 +352,8 @@ second_update = [
         'port_dst': 25050,
         'protocol_code': 6,
         'byte_count': 3794,
-        'packet_count': 209
+        'packet_count': 209,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -328,7 +362,8 @@ second_update = [
         'port_dst': 20200,
         'protocol_code': 7,
         'byte_count': 740,
-        'packet_count': 9
+        'packet_count': 9,
+        'duration': 52
     },
     {
         'ip_src': "110.0.0.1",
@@ -337,7 +372,8 @@ second_update = [
         'port_dst': 29056,
         'protocol_code': 8,
         'byte_count': 25640,
-        'packet_count': 3229
+        'packet_count': 3229,
+        'duration': 52
     },
     {
         'ip_src': "127.0.0.1",
@@ -346,7 +382,8 @@ second_update = [
         'port_dst': 20000,
         'protocol_code': 9,
         'byte_count': 460,
-        'packet_count': 38
+        'packet_count': 38,
+        'duration': 52
     },
     {
         'ip_src': "200.0.0.1",
@@ -355,7 +392,8 @@ second_update = [
         'port_dst': 21556,
         'protocol_code': 10,
         'byte_count': 20540,
-        'packet_count': 3007
+        'packet_count': 3007,
+        'duration': 52
     },
 ]
 
@@ -369,7 +407,8 @@ second_finished = [
         'port_dst': 29356,
         'protocol_code': 4,
         'byte_count': 202360,
-        'packet_count': 3340
+        'packet_count': 3340,
+        'duration': 52
     },
     {
         'ip_src': "200.0.0.1",
@@ -378,7 +417,8 @@ second_finished = [
         'port_dst': 21556,
         'protocol_code': 10,
         'byte_count': 20540,
-        'packet_count': 3007
+        'packet_count': 3007,
+        'duration': 52
     },
 {
         'ip_src': "205.0.0.1",
@@ -387,7 +427,8 @@ second_finished = [
         'port_dst': 22000,
         'protocol_code': 16,
         'byte_count': 500,
-        'packet_count': 5
+        'packet_count': 5,
+        'duration': 52
     },
     {
         'ip_src': "206.0.0.1",
@@ -396,7 +437,8 @@ second_finished = [
         'port_dst': 21200,
         'protocol_code': 17,
         'byte_count': 600,
-        'packet_count': 6
+        'packet_count': 6,
+        'duration': 52
     },
 ]
 
@@ -410,7 +452,8 @@ third_update = [
         'port_dst': 20356,
         'protocol_code': 1,
         'byte_count': 5360,
-        'packet_count': 87
+        'packet_count': 87,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -419,7 +462,8 @@ third_update = [
         'port_dst': 21300,
         'protocol_code': 2,
         'byte_count': 5590,
-        'packet_count': 89
+        'packet_count': 89,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.1",
@@ -428,7 +472,8 @@ third_update = [
         'port_dst': 29000,
         'protocol_code': 14,
         'byte_count': 5000,
-        'packet_count': 50
+        'packet_count': 50,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -437,7 +482,8 @@ third_update = [
         'port_dst': 24000,
         'protocol_code': 5,
         'byte_count': 5660,
-        'packet_count': 90
+        'packet_count': 90,
+        'duration': 52
     },
     {
         'ip_src': "10.0.0.2",
@@ -446,7 +492,8 @@ third_update = [
         'port_dst': 25050,
         'protocol_code': 6,
         'byte_count': 8794,
-        'packet_count': 259
+        'packet_count': 259,
+        'duration': 52
     },
     {
         'ip_src': "100.15.14.33",
@@ -455,7 +502,8 @@ third_update = [
         'port_dst': 20200,
         'protocol_code': 7,
         'byte_count': 5740,
-        'packet_count': 59
+        'packet_count': 59,
+        'duration': 52
     },
     {
         'ip_src': "110.0.0.1",
@@ -464,7 +512,8 @@ third_update = [
         'port_dst': 29056,
         'protocol_code': 8,
         'byte_count': 30640,
-        'packet_count': 3279
+        'packet_count': 3279,
+        'duration': 52
     },
     {
         'ip_src': "127.0.0.1",
@@ -473,7 +522,8 @@ third_update = [
         'port_dst': 20000,
         'protocol_code': 9,
         'byte_count': 5460,
-        'packet_count': 88
+        'packet_count': 88,
+        'duration': 52
     },
     {
         'ip_src': "205.0.0.1",
@@ -482,7 +532,8 @@ third_update = [
         'port_dst': 21000,
         'protocol_code': 15,
         'byte_count': 5000,
-        'packet_count': 50
+        'packet_count': 50,
+        'duration': 52
     },
 ]
 

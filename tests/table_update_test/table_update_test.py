@@ -1,6 +1,6 @@
 from operator import itemgetter
 
-import tests.test_collection
+import tests.table_update_test.test_update_test_data
 import random
 from dataryu import FlowDataTable
 
@@ -49,9 +49,9 @@ def run_delete_test(dataTable, values, result):
 
 table = FlowDataTable.FlowDataTable()
 
-run_test(table, tests.test_collection.init_data_table, tests.test_collection.init_result)
-run_test(table, tests.test_collection.first_update, tests.test_collection.first_update_result)
-run_delete_test(table, tests.test_collection.first_finished, tests.test_collection.first_finished_results)
-run_test(table, tests.test_collection.second_update, tests.test_collection.second_update_result)
-run_delete_test(table, tests.test_collection.second_finished, tests.test_collection.second_finished_results)
-run_test(table, tests.test_collection.third_update, tests.test_collection.third_update_result)
+run_test(table, tests.table_update_test.test_update_test_data.init_data_table, tests.table_update_test.test_update_test_data.init_result)
+run_test(table, tests.table_update_test.test_update_test_data.first_update, tests.table_update_test.test_update_test_data.first_update_result)
+run_delete_test(table, tests.table_update_test.test_update_test_data.first_finished, tests.table_update_test.test_update_test_data.first_finished_results)
+run_test(table, tests.table_update_test.test_update_test_data.second_update, tests.table_update_test.test_update_test_data.second_update_result)
+run_delete_test(table, tests.table_update_test.test_update_test_data.second_finished, tests.table_update_test.test_update_test_data.second_finished_results)
+run_test(table, tests.table_update_test.test_update_test_data.third_update, tests.table_update_test.test_update_test_data.third_update_result)

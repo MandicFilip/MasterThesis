@@ -38,6 +38,7 @@ UDP_CODE = 17
 
 MIN_LENGTH = 3
 
+
 # -------------------------------------------------PROCESS FLOW DATA----------------------------------------------------
 
 
@@ -111,7 +112,7 @@ def process_flow_data(output):
 
 
 def extract_match_data(match):
-    print(match)
+    # print('This is a matched data:' + str(match))
 
     match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
 
@@ -244,8 +245,8 @@ class FlowInfo:
         self.packet_median = statistics.median(self.packet_count_list)
 
     def calc_mode(self):
-        self.byte_mode = statistics.mode(self.byte_count_list)
-        self.packet_mode = statistics.mode(self.packet_count_list)
+        self.byte_mode = scipy.stats.mode(self.byte_count_list).mode[0]
+        self.packet_mode = scipy.stats.mode(self.packet_count_list).mode[0]
 
     def calc_standard_deviation(self):
         self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
@@ -271,113 +272,6 @@ class FlowInfo:
             self.pair_flow.byte_count_list.insert(0, 0)
             self.pair_flow.packet_count_list.insert(0, 0)
 
-# -------------------------------------------------DATA TABLE-----------------------------------------------------------
-
-
-def get_dict_match(data):
-    return {
-        'ip_src': data['ip_src'],
-        'ip_dst': data['ip_dst'],
-        'port_src': data['port_src'],
-        'port_dst': data['port_dst'],
-        'protocol_code': data['protocol_code']
-    }
-
-
-class FlowDataTable:
-    def __init__(self):
-        self.active_flows = []
-        self.finished_flows = []
-        self.interval = 0
-
-    def update_data(self, sorted_data):
-        i = 0
-        j = 0
-        while i < len(sorted_data) and (j < len(self.active_flows)):
-            value = self.active_flows[j].compare_match_to_entry(sorted_data[i])
-
-            if value < 0:
-                # new flow should be added
-                new_entry = FlowInfo(start_interval=self.interval, data=sorted_data[i])
-                self.active_flows.insert(j, new_entry)
-                i = i + 1
-                j = j + 1
-            elif value > 0:
-                # finished flow, no input for it
-                j = j + 1
-            else:
-                self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
-                self.active_flows[j].change_duration(sorted_data[i]['duration'])
-                i = i + 1
-                j = j + 1
-
-        while i < len(sorted_data):
-            new_entry = FlowInfo(start_interval=self.interval, data=sorted_data[i])
-            self.active_flows.append(new_entry)
-            i = i + 1
-
-        self.interval = self.interval + 1
-
-    def find_flow(self, key):
-        low = 0
-        high = len(self.active_flows) - 1
-        while low <= high:
-            mid = int((low + high) / 2)
-            flow = self.active_flows[mid]
-            value = flow.compare_match_to_entry(key)
-            if value == 0:
-                return mid
-            if value < 0:
-                high = mid - 1
-            else:
-                low = mid + 1
-        return -1
-
-    def find_pair_for_flow(self, flow):
-        key = {}
-        key['ip_src'] = flow.ip_dst
-        key['ip_dst'] = flow.ip_src
-        key['port_src'] = flow.port_dst
-        key['port_dst'] = flow.port_src
-        key['protocol_code'] = flow.protocol_code
-        index = self.find_flow(key)
-        if index != -1:
-            return self.active_flows[index]
-        return None
-
-    def update_finished_flow(self, finished_flow_data):
-        index = self.find_flow(finished_flow_data)
-
-        if index != -1:
-            flow = self.active_flows[index]
-            flow.update_counters(finished_flow_data['byte_count'], finished_flow_data['packet_count'])
-            flow.change_duration(finished_flow_data['duration'])
-            flow.finished = True
-        else:
-            print('Can not find finished flow')
-
-    def clear_finished_flows(self):
-        self.finished_flows[:] = []
-        pass
-
-    def calc_stats(self):
-        for flow in self.active_flows:
-            if not flow.is_pair_flow_set():
-                pair = self.find_pair_for_flow(flow)
-                if pair is not None:
-                    flow.set_pair_flow(pair)
-            flow.recalculate_stats()
-
-        print("Stats done")
-
-    def separate_finished_flows(self):
-        i = 0
-        while i < len(self.active_flows):
-            if self.active_flows[i].finished:
-                flow = self.active_flows.pop(i)
-                self.finished_flows.append(flow)
-            else:
-                i = i + 1
 
 # -------------------------------------------------DATA STORAGE---------------------------------------------------------
 
@@ -481,6 +375,124 @@ def save_finished_flows(file, flows):
         return False
 
 
+# -------------------------------------------------DATA TABLE-----------------------------------------------------------
+
+
+def get_dict_match(data):
+    return {
+        'ip_src': data['ip_src'],
+        'ip_dst': data['ip_dst'],
+        'port_src': data['port_src'],
+        'port_dst': data['port_dst'],
+        'protocol_code': data['protocol_code']
+    }
+
+
+class FlowDataTable:
+    def __init__(self):
+        self.active_flows = []
+        self.finished_flows = []
+        self.interval = 0
+
+    def update(self, data):
+        self.update_active_flows_table(data)
+        self.calc_stats()
+        self.separate_finished_flows()
+
+    def update_active_flows_table(self, sorted_data):
+        i = 0
+        j = 0
+        while i < len(sorted_data) and (j < len(self.active_flows)):
+            value = self.active_flows[j].compare_match_to_entry(sorted_data[i])
+
+            if value < 0:
+                # new flow should be added
+                new_entry = FlowInfo(start_interval=self.interval, data=sorted_data[i])
+                self.active_flows.insert(j, new_entry)
+                i = i + 1
+                j = j + 1
+            elif value > 0:
+                if not self.active_flows[j].finished:
+                    print('No data for unfinished flow')
+                # finished flow, no input for it
+                j = j + 1
+            else:
+                self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
+                self.active_flows[j].change_duration(sorted_data[i]['duration'])
+                i = i + 1
+                j = j + 1
+
+        while i < len(sorted_data):
+            new_entry = FlowInfo(start_interval=self.interval, data=sorted_data[i])
+            self.active_flows.append(new_entry)
+            i = i + 1
+
+        self.interval = self.interval + 1
+
+    def find_flow(self, key):
+        low = 0
+        high = len(self.active_flows) - 1
+        while low <= high:
+            mid = int((low + high) / 2)
+            flow = self.active_flows[mid]
+            value = flow.compare_match_to_entry(key)
+            if value == 0:
+                return mid
+            if value < 0:
+                high = mid - 1
+            else:
+                low = mid + 1
+        return -1
+
+    def find_pair_for_flow(self, flow):
+        key = {'ip_src': flow.ip_dst, 'ip_dst': flow.ip_src, 'port_src': flow.port_dst, 'port_dst': flow.port_src,
+               'protocol_code': flow.protocol_code}
+        index = self.find_flow(key)
+        if index != -1:
+            return self.active_flows[index]
+        return None
+
+    def update_finished_flow(self, finished_flow_data):
+        index = self.find_flow(finished_flow_data)
+
+        if index != -1:
+            flow = self.active_flows[index]
+            flow.update_counters(finished_flow_data['byte_count'], finished_flow_data['packet_count'])
+            flow.change_duration(finished_flow_data['duration'])
+            flow.finished = True
+        else:
+            print('Can not find finished flow\n' + str(finished_flow_data))
+
+    def clear_finished_flows(self):
+        self.finished_flows = []
+        pass
+
+    def calc_stats(self):
+        for flow in self.active_flows:
+            if not flow.is_pair_flow_set():
+                pair = self.find_pair_for_flow(flow)
+                if pair is not None:
+                    flow.set_pair_flow(pair)
+            flow.recalculate_stats()
+
+        print("Stats done")
+
+    def separate_finished_flows(self):
+        i = 0
+        while i < len(self.active_flows):
+            if self.active_flows[i].finished:
+                flow = self.active_flows.pop(i)
+                self.finished_flows.append(flow)
+            else:
+                i = i + 1
+
+    def save_flows(self, active_flows_file, finished_flows_file):
+        save_active_flows(active_flows_file, self.active_flows)
+        save_finished_flows(finished_flows_file, self.finished_flows)
+        self.clear_finished_flows()
+        print('Saved flows')
+
+
 # -------------------------------------------------STATS CONTROLLER-----------------------------------------------------
 GET_STATISTICS_COMMAND = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
 
@@ -501,7 +513,8 @@ class StatsCollector(app_manager.RyuApp):
         self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
         self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
         self.CONF.register_opts([cfg.StrOpt('ACTIVE_FLOWS_FILE', default='active_flows.info', help='active flows')])
-        self.CONF.register_opts([cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
+        self.CONF.register_opts(
+            [cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
         self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
         self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
         self.datapath = None
@@ -511,14 +524,12 @@ class StatsCollector(app_manager.RyuApp):
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
 
     def run(self):
-        hub.sleep(self.CONF.COLLECT_INTERVAL)
         while True:
+            hub.sleep(self.CONF.COLLECT_INTERVAL)
             if self.datapath is not None:
                 parser = self.datapath.ofproto_parser
                 req = parser.OFPDescStatsRequest(self.datapath, 0)
                 self.datapath.send_msg(req)
-
-            hub.sleep(self.CONF.COLLECT_INTERVAL)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -528,19 +539,12 @@ class StatsCollector(app_manager.RyuApp):
     def _flow_stats_reply_handler(self, ev):
         try:
             data = get_statistics()
-            self.dataTable.update_data(data)
-            self.dataTable.calc_stats()
-            self.dataTable.separate_finished_flows()
-
-            # print(self.dataTable.active_flows)
-            # print(self.dataTable.finished_flows)
+            self.dataTable.update(data)
 
             self.save_counter = self.save_counter + 1
             if self.save_counter == self.CONF.SAVE_INTERVAL:
                 self.save_counter = 0
-                save_active_flows(self.CONF.ACTIVE_FLOWS_FILE, self.dataTable.active_flows)
-                save_finished_flows(self.CONF.FINISHED_FLOWS_FILE, self.dataTable.finished_flows)
-                self.dataTable.clear_finished_flows()
+                self.dataTable.save_flows(self.CONF.ACTIVE_FLOWS_FILE, self.CONF.FINISHED_FLOWS_FILE)
 
         except subprocess.CalledProcessError as err:
             self.logger.info("Error collecting data")
@@ -555,5 +559,4 @@ class StatsCollector(app_manager.RyuApp):
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
             flow_data['duration'] = ev.msg.stats['duration']
-
             self.dataTable.update_finished_flow(flow_data)
