@@ -18,7 +18,13 @@ from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_5
+from ryu.lib.packet import packet
 from ryu.lib.packet import in_proto
+from ryu.lib.packet import ethernet
+from ryu.lib.packet import ipv4
+from ryu.lib.packet import tcp
+from ryu.lib.packet import udp
+from ryu.lib.packet import ether_types
 from ryu.lib import hub
 from ryu import cfg
 import statistics
@@ -36,7 +42,8 @@ TCP_FLAGS_PRIORITY_LEVEL = 3
 TCP_CODE = 6
 UDP_CODE = 17
 
-MIN_LENGTH = 3
+DNS_PORT = 53
+MIN_LENGTH = 2
 
 
 # -------------------------------------------------PROCESS FLOW DATA----------------------------------------------------
@@ -112,8 +119,6 @@ def process_flow_data(output):
 
 
 def extract_match_data(match):
-    # print('This is a matched data:' + str(match))
-
     match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
 
     if match['ip_proto'] == in_proto.IPPROTO_TCP:
@@ -173,17 +178,22 @@ class FlowInfo:
         self.packet_correlation = 0
 
     def recalculate_stats(self):
-        if len(self.byte_count_list) > MIN_LENGTH:
-            self.calc_mean()
-            self.calc_median()
-            self.calc_mode()
-            self.calc_standard_deviation()
-            self.calc_skew()
-            self.calc_kurtosis()
-            if self.pair_flow is not None:
-                if len(self.byte_count_list) != len(self.pair_flow.byte_count_list):
-                    self.match_flow_lengths_with_pair()
-                self.calc_correlation()
+        self.calc_mean()
+        self.calc_median()
+        self.calc_mode()
+        self.calc_standard_deviation()
+        self.calc_skew()
+        self.calc_kurtosis()
+        if self.pair_flow is not None:
+            if len(self.byte_count_list) != len(self.pair_flow.byte_count_list):
+                self.match_flow_lengths_with_pair()
+            self.calc_correlation()
+
+    def perform_final_processing(self, count):
+        if self.protocol_code == UDP_CODE:
+            del self.byte_count_list[-count:]
+            del self.packet_count_list[-count:]
+            self.recalculate_stats()
 
     def is_pair_flow_set(self):
         return self.pair_flow is not None
@@ -249,20 +259,37 @@ class FlowInfo:
         self.packet_mode = scipy.stats.mode(self.packet_count_list).mode[0]
 
     def calc_standard_deviation(self):
-        self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
-        self.packet_standard_deviation = statistics.stdev(self.packet_count_list)
+        if len(self.byte_count_list) > MIN_LENGTH:
+            self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
+            self.packet_standard_deviation = statistics.stdev(self.packet_count_list)
+        else:
+            self.byte_standard_deviation = 0
+            self.packet_standard_deviation = 0
 
     def calc_skew(self):
         self.byte_fisher_skew = scipy.stats.skew(self.byte_count_list)
         self.packet_fisher_skew = scipy.stats.skew(self.packet_count_list)
 
     def calc_kurtosis(self):
-        self.byte_fisher_kurtosis = scipy.stats.kurtosis(self.byte_count_list)
-        self.packet_fisher_kurtosis = scipy.stats.kurtosis(self.packet_count_list)
+        if len(self.byte_count_list) > MIN_LENGTH:
+            self.byte_fisher_kurtosis = scipy.stats.kurtosis(self.byte_count_list)
+            self.packet_fisher_kurtosis = scipy.stats.kurtosis(self.packet_count_list)
+        else:
+            self.byte_fisher_kurtosis = 0
+            self.packet_fisher_kurtosis = 0
 
     def calc_correlation(self):
-        self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, self.pair_flow.byte_count_list)
-        self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, self.pair_flow.packet_count_list)
+        if len(self.byte_count_list) > MIN_LENGTH:
+            try:
+                self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, self.pair_flow.byte_count_list)
+                self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, self.pair_flow.packet_count_list)
+            except:
+                print('Byte list: ' + str(self.byte_count_list))
+                print('Pair list: ' + str(self.byte_count_list))
+                print('\n\n\n\n\n\n\n\n')
+        else:
+            self.byte_correlation = 0
+            self.packet_correlation = 0
 
     def match_flow_lengths_with_pair(self):
         if len(self.byte_count_list) < len(self.pair_flow.byte_count_list):
@@ -378,6 +405,10 @@ def save_finished_flows(file, flows):
 # -------------------------------------------------DATA TABLE-----------------------------------------------------------
 
 
+def is_dns_communication(match):
+    return match['protocol_code'] == UDP_CODE and (match['port_src'] == DNS_PORT or match['port_dst'] == DNS_PORT)
+
+
 def get_dict_match(data):
     return {
         'ip_src': data['ip_src'],
@@ -389,10 +420,20 @@ def get_dict_match(data):
 
 
 class FlowDataTable:
-    def __init__(self):
+    def __init__(self, udp_interval):
         self.active_flows = []
         self.finished_flows = []
         self.interval = 0
+        self.udp_interval = udp_interval
+
+    def push_first_packet_info(self, info):
+        info['duration'] = 0
+        if is_dns_communication(info):
+            new_entry = FlowInfo(start_interval=self.interval, data=info)
+            self.finished_flows.append(new_entry)
+            new_entry.recalculate_stats()
+        else:
+            self.insert_active_flow(info)
 
     def update(self, data):
         self.update_active_flows_table(data)
@@ -412,8 +453,6 @@ class FlowDataTable:
                 i = i + 1
                 j = j + 1
             elif value > 0:
-                if not self.active_flows[j].finished:
-                    print('No data for unfinished flow')
                 # finished flow, no input for it
                 j = j + 1
             else:
@@ -428,6 +467,14 @@ class FlowDataTable:
             i = i + 1
 
         self.interval = self.interval + 1
+
+    def insert_active_flow(self, flow):
+        i = 0
+        while i < len(self.active_flows) and self.active_flows[i].compare_match_to_entry(flow) == -1:
+            i = i + 1
+        print('Insert new flow: {' + str(flow['byte_count']) + ', ' + str(flow['packet_count']) + '}\n')
+        new_entry = FlowInfo(start_interval=self.interval, data=flow)
+        self.active_flows.insert(i, new_entry)
 
     def find_flow(self, key):
         low = 0
@@ -483,6 +530,7 @@ class FlowDataTable:
             if self.active_flows[i].finished:
                 flow = self.active_flows.pop(i)
                 self.finished_flows.append(flow)
+                flow.perform_final_processing(self.udp_interval)
             else:
                 i = i + 1
 
@@ -504,12 +552,32 @@ def get_statistics():
     return process_flow_data(output)
 
 
+def extract_data_from_pkt(pkt):
+    eth = pkt.get_protocols(ethernet.ethernet)[0]
+    if eth.ethertype != ether_types.ETH_TYPE_IP:
+        return None
+
+    ip = pkt.get_protocol(ipv4.ipv4)
+    protocol = ip.proto
+
+    if protocol == in_proto.IPPROTO_TCP:
+        tcp_p = pkt.get_protocol(tcp.tcp)
+        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
+                'protocol_code': TCP_CODE, 'byte_count': int(ip.total_length), 'packet_count': 1}
+    elif protocol == in_proto.IPPROTO_UDP:
+        udp_p = pkt.get_protocol(udp.udp)
+        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
+                'protocol_code': UDP_CODE, 'byte_count': int(ip.total_length), 'packet_count': 1}
+    return None
+
+
 class StatsCollector(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_5.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(StatsCollector, self).__init__(*args, **kwargs)
         self.CONF = cfg.CONF
+        self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT_STAT', default=10, help='Idle Timeout for UDP flows')])
         self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
         self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
         self.CONF.register_opts([cfg.StrOpt('ACTIVE_FLOWS_FILE', default='active_flows.info', help='active flows')])
@@ -518,7 +586,7 @@ class StatsCollector(app_manager.RyuApp):
         self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
         self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
         self.datapath = None
-        self.dataTable = FlowDataTable()
+        self.dataTable = FlowDataTable(self.CONF.IDLE_TIMEOUT_STAT)
         self.stats_thread = hub.spawn(self.run)
         self.save_counter = 0
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
@@ -560,3 +628,11 @@ class StatsCollector(app_manager.RyuApp):
             flow_data['packet_count'] = ev.msg.stats['packet_count']
             flow_data['duration'] = ev.msg.stats['duration']
             self.dataTable.update_finished_flow(flow_data)
+
+    @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
+    def _packet_in_handler(self, ev):
+        msg = ev.msg
+        pkt = packet.Packet(msg.data)
+        data = extract_data_from_pkt(pkt)
+        if data:
+            self.dataTable.push_first_packet_info(data)
