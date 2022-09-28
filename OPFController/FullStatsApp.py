@@ -79,14 +79,6 @@ class StatsCollector(app_manager.RyuApp):
         self.save_counter = 0
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
 
-    def run(self):
-        while True:
-            hub.sleep(self.CONF.COLLECT_INTERVAL)
-            if self.datapath is not None:
-                parser = self.datapath.ofproto_parser
-                req = parser.OFPDescStatsRequest(self.datapath, 0)
-                self.datapath.send_msg(req)
-
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         self.datapath = ev.msg.datapath
@@ -143,7 +135,7 @@ class StatsCollector(app_manager.RyuApp):
         data = extract_data_from_pkt(pkt)
         if data:
             if self.is_tcp_flags_packet(pkt, eth):
-                # TODO call appropriate method
+                # TODO call appropriate method -> process last package
                 pass
             else:
                 self.dataTable.on_add_flow(data)

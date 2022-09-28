@@ -27,6 +27,9 @@ from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 from ryu import cfg
 from ryu.lib import hub
+from input import input
+import shlex, subprocess
+
 
 TABLE_MISS_PRIORITY_LEVEL = 0
 ICMP_PRIORITY_LEVEL = 1
@@ -34,17 +37,104 @@ TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
 
 
+def extract_data_from_pkt(pkt):
+    eth = pkt.get_protocols(ethernet.ethernet)[0]
+    if eth.ethertype != ether_types.ETH_TYPE_IP:
+        return None
+
+    ip = pkt.get_protocol(ipv4.ipv4)
+    protocol = ip.proto
+
+    if protocol == in_proto.IPPROTO_TCP:
+        tcp_p = pkt.get_protocol(tcp.tcp)
+        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
+                'protocol_code': in_proto.IPPROTO_TCP, 'byte_count': int(ip.total_length), 'packet_count': 1}
+    elif protocol == in_proto.IPPROTO_UDP:
+        udp_p = pkt.get_protocol(udp.udp)
+        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
+                'protocol_code': in_proto.IPPROTO_UDP, 'byte_count': int(ip.total_length), 'packet_count': 1}
+    return None
+
+
+def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+
+    inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+    cookie = 0
+    cookie_mask = 0
+    table_id = 0
+    hard_timeout = 0
+    importance = 0
+
+    if not buffer_id:
+        buffer_id = ofproto.OFP_NO_BUFFER
+
+    mod = parser.OFPFlowMod(datapath,
+                            cookie,
+                            cookie_mask,
+                            table_id,
+                            ofproto.OFPFC_ADD,
+                            idle_timeout,
+                            hard_timeout,
+                            priority,
+                            buffer_id,
+                            ofproto.OFPP_ANY,
+                            ofproto.OFPG_ANY,
+                            ofproto.OFPFF_SEND_FLOW_REM,
+                            importance,
+                            match,
+                            inst)
+    datapath.send_msg(mod)
+
+
+def is_tcp_flags_packet(pkt, eth):
+    if eth.ethertype != ether_types.ETH_TYPE_IP:
+        return False
+
+    ip = pkt.get_protocol(ipv4.ipv4)
+    protocol = ip.proto
+
+    if protocol != in_proto.IPPROTO_TCP:
+        return False
+
+    tcp_p = pkt.get_protocol(tcp.tcp)
+    tcp_flags = tcp_p.bits
+
+    if tcp_flags & 0x1 or tcp_flags & 0x4:
+        return True
+
+    return False
+
+
+def forward_packet(datapath, msg, in_port, actions):
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+
+    data = None
+    if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+        data = msg.data
+
+    match = parser.OFPMatch(in_port=in_port)
+
+    out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
+                                  match=match, actions=actions, data=data)
+    datapath.send_msg(out)
+
+
 class SwitchController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_5.OFP_VERSION]
 
     def __init__(self, *args, **kwargs):
         super(SwitchController, self).__init__(*args, **kwargs)
+        self.stats_switch = None
         self.mac_to_port = {}
         self.CONF = cfg.CONF
         self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT', default=10, help='Idle Timeout'),
                                  cfg.IntOpt('DELETE_INTERVAL', default=1, help='Delete Interval')])
         self.logger.info("Idle timeout: %d seconds", self.CONF.IDLE_TIMEOUT)
         self.logger.info("Delete Interval: %d seconds", self.CONF.DELETE_INTERVAL)
+        self.stats_thread = hub.spawn(self.run_stats_thread)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -59,47 +149,15 @@ class SwitchController(app_manager.RyuApp):
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
+        add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
 
         # install tcp flags flow entry - we need packet with flags for tcp session end to remove flow from table
-        match = parser.OFPMatch(eth_type=0x0800, ip_proto=6, tcp_flags=(0x001 | 0x004))
+        match = parser.OFPMatch(eth_type=0x0800, ip_proto=in_proto.IPPROTO_TCP, tcp_flags=(0x001 | 0x004))
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
+        add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
 
-    @staticmethod
-    def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        cookie = 0
-        cookie_mask = 0
-        table_id = 0
-        hard_timeout = 0
-        importance = 0
-
-        if not buffer_id:
-            buffer_id = ofproto.OFP_NO_BUFFER
-
-        mod = parser.OFPFlowMod(datapath,
-                                cookie,
-                                cookie_mask,
-                                table_id,
-                                ofproto.OFPFC_ADD,
-                                idle_timeout,
-                                hard_timeout,
-                                priority,
-                                buffer_id,
-                                ofproto.OFPP_ANY,
-                                ofproto.OFPG_ANY,
-                                ofproto.OFPFF_SEND_FLOW_REM,
-                                importance,
-                                match,
-                                inst)
-        datapath.send_msg(mod)
-
-    def ethernet_processing(self, datapath, msg, eth):
+    def get_ethernet_ports(self, datapath, msg, eth):
         ofproto = datapath.ofproto
 
         in_port = msg.match['in_port']
@@ -117,25 +175,6 @@ class SwitchController(app_manager.RyuApp):
             out_port = self.mac_to_port[dpid][dst]
 
         return in_port, out_port
-
-    @staticmethod
-    def is_tcp_flags_packet(pkt, eth):
-        if eth.ethertype != ether_types.ETH_TYPE_IP:
-            return False
-
-        ip = pkt.get_protocol(ipv4.ipv4)
-        protocol = ip.proto
-
-        if protocol != in_proto.IPPROTO_TCP:
-            return False
-
-        tcp_p = pkt.get_protocol(tcp.tcp)
-        tcp_flags = tcp_p.bits
-
-        if tcp_flags & 0x1 or tcp_flags & 0x4:
-            return True
-
-        return False
 
     def process_tcp_flags_packet(self, datapath, pkt, actions, buffer_id):
         ofproto = datapath.ofproto
@@ -258,24 +297,9 @@ class SwitchController(app_manager.RyuApp):
                 # verify if we have a valid buffer_id, if yes avoid to send both
                 # flow_mod & packet_out
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, priority, match, actions, idle_timeout, msg.buffer_id)
+                    add_flow(datapath, priority, match, actions, idle_timeout, msg.buffer_id)
                 else:
-                    self.add_flow(datapath, priority, match, actions, idle_timeout)
-
-    @staticmethod
-    def forward_packet(datapath, msg, in_port, actions):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        data = None
-        if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-            data = msg.data
-
-        match = parser.OFPMatch(in_port=in_port)
-
-        out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  match=match, actions=actions, data=data)
-        datapath.send_msg(out)
+                    add_flow(datapath, priority, match, actions, idle_timeout)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -294,13 +318,45 @@ class SwitchController(app_manager.RyuApp):
             # ignore lldp packet
             return
 
-        in_port, out_port = self.ethernet_processing(datapath, msg, eth)
-
+        in_port, out_port = self.get_ethernet_ports(datapath, msg, eth)
         actions = [parser.OFPActionOutput(out_port)]
 
-        if self.is_tcp_flags_packet(pkt, eth):
+        if is_tcp_flags_packet(pkt, eth):
             self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
         else:
             self.install_flow(datapath, msg, pkt, eth, out_port, actions)
 
-        self.forward_packet(datapath, msg, in_port, actions)
+        forward_packet(datapath, msg, in_port, actions)
+
+    def run_stats_thread(self):
+        while True:
+            hub.sleep(self.CONF.COLLECT_INTERVAL)
+            if self.stats_switch is not None:
+                parser = self.stats_switch.ofproto_parser
+                req = parser.OFPDescStatsRequest(self.stats_switch, 0)
+                self.stats_switch.send_msg(req)
+
+    @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
+    def _flow_stats_reply_handler(self, ev):
+        try:
+            data = input.get_statistics()
+            self.dataTable.on_update(data)
+
+            self.save_counter = self.save_counter + 1
+            if self.save_counter == self.CONF.SAVE_INTERVAL:
+                self.save_counter = 0
+                self.dataTable.save_flows(self.CONF.ACTIVE_FLOWS_FILE, self.CONF.FINISHED_FLOWS_FILE)
+
+        except subprocess.CalledProcessError as err:
+            self.logger.info("Error collecting data")
+            self.logger.debug(err)
+
+    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
+    def flow_removal_handler(self, ev):
+        flow_data = input.extract_match_data(ev.msg.match)
+
+        # add stats data
+        if flow_data is not None:
+            flow_data['byte_count'] = ev.msg.stats['byte_count']
+            flow_data['packet_count'] = ev.msg.stats['packet_count']
+            self.dataTable.on_flow_removed(flow_data)
