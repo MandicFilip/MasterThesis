@@ -12,6 +12,8 @@ class MatchV2:
         self.protocol_code = entry['protocol_code']
 
     def compare_match_to_entry(self, entry):
+        print('Match -> {' + self.ip_src + ', ' + self.ip_dst + ', ' + str(self.port_src) + ', ' + str(self.port_dst) + '}')
+        print('Entry -> ' + str(entry))
         if self.ip_src != entry['ip_src']:
             if self.ip_src < entry['ip_src']:
                 return 1

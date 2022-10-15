@@ -26,12 +26,12 @@ from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 
-from v2.storageV2 import init_finished_flows_storage
-from v2.TableV2 import FlowDataTableV2
+from /home/mininet/v2/v2.storageV2 import init_finished_flows_storage
+from /home/mininet/v2/v2.TableV2 import FlowDataTableV2
 
 from ryu import cfg
 from ryu.lib import hub
-from v2 import inputV2
+from /home/mininet/v2 import inputV2
 import subprocess
 
 
@@ -150,7 +150,6 @@ class SwitchController(app_manager.RyuApp):
         self.logger.info("Finished flows file: ", self.CONF.FINISHED_FLOWS_FILE)
 
         self.dataTable = FlowDataTableV2(self.CONF.IDLE_TIMEOUT)
-        self.stats_thread = hub.spawn(self.run)
         self.save_counter = 0
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
         self.stats_thread = hub.spawn(self.run_stats_thread)

@@ -1,4 +1,4 @@
-from v2 import DataV2
+from v2.dataV2 import DataV2
 from v2.match import MatchV2
 
 MIN_LENGTH = 2

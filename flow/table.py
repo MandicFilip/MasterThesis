@@ -51,6 +51,7 @@ class FlowDataTable:
                 # finished flow, no input for it
                 j = j + 1
             else:
+                print('Found flow -> update stats')
                 self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
                 i = i + 1
                 j = j + 1
