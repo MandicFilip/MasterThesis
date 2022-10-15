@@ -79,10 +79,12 @@ class StatsCollector(app_manager.RyuApp):
         self.save_counter = 0
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
 
+    # merged
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         self.datapath = ev.msg.datapath
 
+    # merged
     @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         try:
@@ -98,6 +100,7 @@ class StatsCollector(app_manager.RyuApp):
             self.logger.info("Error collecting data")
             self.logger.debug(err)
 
+    # merged
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
         flow_data = input.extract_match_data(ev.msg.match)
@@ -108,6 +111,7 @@ class StatsCollector(app_manager.RyuApp):
             flow_data['packet_count'] = ev.msg.stats['packet_count']
             self.dataTable.on_flow_removed(flow_data)
 
+    # merged
     @staticmethod
     def is_tcp_flags_packet(pkt, eth):
         if eth.ethertype != ether_types.ETH_TYPE_IP:
@@ -127,6 +131,7 @@ class StatsCollector(app_manager.RyuApp):
 
         return False
 
+    # merged
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
         msg = ev.msg

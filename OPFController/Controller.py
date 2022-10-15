@@ -25,6 +25,10 @@ from ryu.lib.packet import in_proto
 from ryu.lib.packet import ipv4
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
+
+from flow.storage import init_finished_flows_storage
+from flow.v2.TableV2 import FlowDataTableV2
+
 from ryu import cfg
 from ryu.lib import hub
 from input import input
@@ -118,7 +122,7 @@ def forward_packet(datapath, msg, in_port, actions):
     match = parser.OFPMatch(in_port=in_port)
 
     out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                                  match=match, actions=actions, data=data)
+                              match=match, actions=actions, data=data)
     datapath.send_msg(out)
 
 
@@ -129,11 +133,26 @@ class SwitchController(app_manager.RyuApp):
         super(SwitchController, self).__init__(*args, **kwargs)
         self.stats_switch = None
         self.mac_to_port = {}
+
         self.CONF = cfg.CONF
         self.CONF.register_opts([cfg.IntOpt('IDLE_TIMEOUT', default=10, help='Idle Timeout'),
                                  cfg.IntOpt('DELETE_INTERVAL', default=1, help='Delete Interval')])
+        self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
+        self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
+        self.CONF.register_opts([cfg.StrOpt('ACTIVE_FLOWS_FILE', default='active_flows.info', help='active flows')])
+        self.CONF.register_opts(
+            [cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
+        self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
+        self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
         self.logger.info("Idle timeout: %d seconds", self.CONF.IDLE_TIMEOUT)
         self.logger.info("Delete Interval: %d seconds", self.CONF.DELETE_INTERVAL)
+        self.logger.info("Active flows file: " + self.CONF.ACTIVE_FLOWS_FILE)
+        self.logger.info("Finished flows file: ", self.CONF.FINISHED_FLOWS_FILE)
+
+        self.dataTable = FlowDataTableV2(self.CONF.IDLE_TIMEOUT)
+        self.stats_thread = hub.spawn(self.run)
+        self.save_counter = 0
+        init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
         self.stats_thread = hub.spawn(self.run_stats_thread)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
@@ -323,8 +342,10 @@ class SwitchController(app_manager.RyuApp):
 
         if is_tcp_flags_packet(pkt, eth):
             self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
+            self.save_tcp_flags_packet_info(pkt)
         else:
             self.install_flow(datapath, msg, pkt, eth, out_port, actions)
+            self.add_flow_to_stats_table(pkt)
 
         forward_packet(datapath, msg, in_port, actions)
 
@@ -359,4 +380,15 @@ class SwitchController(app_manager.RyuApp):
         if flow_data is not None:
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
+            print('TCP flags data -> ' + str(flow_data))
             self.dataTable.on_flow_removed(flow_data)
+
+    def save_tcp_flags_packet_info(self, packet):
+        data = extract_data_from_pkt(packet)
+        print('TCP flags data -> ' + str(data))
+        self.dataTable.on_tcp_flags_package(data)
+
+    def add_flow_to_stats_table(self, packet):
+        data = extract_data_from_pkt(packet)
+        print('First packet data -> ' + str(data))
+        self.dataTable.on_add_flow(data)

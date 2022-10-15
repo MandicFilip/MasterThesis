@@ -105,7 +105,6 @@ class FlowDataTable:
 
     def clear_finished_flows(self):
         self.finished_flows = []
-        pass
 
     def save_flows(self, active_flows_file, finished_flows_file):
         save_active_flows(active_flows_file, self.active_flows)

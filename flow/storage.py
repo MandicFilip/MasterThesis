@@ -24,19 +24,19 @@ def stringify_statistics(flow):
 
 def format_flow_info(flow):
     flow_string = ""
-    flow_string = flow_string + str(flow.ip_src) + " "
-    flow_string = flow_string + str(flow.ip_dst) + " "
-    flow_string = flow_string + str(flow.port_src) + " "
-    flow_string = flow_string + str(flow.port_dst) + " "
-    flow_string = flow_string + str(flow.protocol_code) + "\n"
+    flow_string = flow_string + str(flow.match.ip_src) + " "
+    flow_string = flow_string + str(flow.match.ip_dst) + " "
+    flow_string = flow_string + str(flow.match.port_src) + " "
+    flow_string = flow_string + str(flow.match.port_dst) + " "
+    flow_string = flow_string + str(flow.match.protocol_code) + "\n"
 
-    flow_string = flow_string + str(flow.total_byte_count) + " "
-    flow_string = flow_string + str(flow.total_packet_count) + "\n"
+    # flow_string = flow_string + str(flow.total_byte_count) + " "
+    # flow_string = flow_string + str(flow.total_packet_count) + "\n"
 
-    flow_string = flow_string + str(flow.byte_count_list) + "\n"
-    flow_string = flow_string + str(flow.packet_count_list) + "\n"
+    flow_string = flow_string + str(flow.data.byte_count_list) + "\n"
+    flow_string = flow_string + str(flow.data.packet_count_list) + "\n"
 
-    flow_string = flow_string + stringify_statistics(flow) + "\n"
+    # flow_string = flow_string + stringify_statistics(flow) + "\n"
     return flow_string
 
 

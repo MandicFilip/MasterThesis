@@ -43,10 +43,9 @@ class Match:
                  'port_src': match.port_src, 'port_dst': match.port_dst}
         return self.compare_match_to_entry(entry)
 
-    def create_opposite_match(self):
-        entry = {'ip_src': self.ip_dst, 'ip_dst': self.ip_src,
-                 'port_src': self.port_dst, 'port_dst': self.port_src, 'protocol_code': self.protocol_code}
-        return Match(entry)
+    def create_opposite_entry(self):
+        return {'ip_src': self.ip_dst, 'ip_dst': self.ip_src,
+                'port_src': self.port_dst, 'port_dst': self.port_src, 'protocol_code': self.protocol_code}
 
     def get_protocol_name(self):
         if self.protocol_code == in_proto.IPPROTO_TCP:
@@ -56,4 +55,11 @@ class Match:
         return 'Not Supported'
 
     def is_dns_communication(self):
-        return self.protocol_code == in_proto.IPPROTO_UDP and (self.port_src == DNS_PORT or self.port_dst == DNS_PORT)
+        return self.is_udp() and (self.port_src == DNS_PORT or self.port_dst == DNS_PORT)
+
+    def get_entry(self):
+        return {'ip_src': self.ip_src, 'ip_dst': self.ip_dst,
+                'port_src': self.port_src, 'port_dst': self.port_dst, 'protocol_code': self.protocol_code}
+
+    def is_udp(self):
+        return self.protocol_code == in_proto.IPPROTO_UDP
