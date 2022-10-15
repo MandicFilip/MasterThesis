@@ -239,9 +239,10 @@ def save_finished_flows(file, flows):
     try:
         file = open(file, "a")
         for flow in flows:
-            flow_string = format_flow_info(flow)
-            file.write(flow_string)
-            file.write("\n")
+            if flow.is_finished():
+                flow_string = format_flow_info(flow)
+                file.write(flow_string)
+                file.write("\n")
 
         file.close()
         return True
@@ -263,8 +264,6 @@ class MatchV2:
         self.protocol_code = entry['protocol_code']
 
     def compare_match_to_entry(self, entry):
-        print('Match -> {' + self.ip_src + ', ' + self.ip_dst + ', ' + str(self.port_src) + ', ' + str(self.port_dst) + '}')
-        print('Entry -> ' + str(entry))
         if self.ip_src != entry['ip_src']:
             if self.ip_src < entry['ip_src']:
                 return 1
@@ -316,6 +315,9 @@ class MatchV2:
 
     def is_udp(self):
         return self.protocol_code == in_proto.IPPROTO_UDP
+
+    def to_string(self):
+        return '{ip_src: ' + self.ip_src + ', ip_dst: ' + self.ip_dst + ', port_src: ' + str(self.port_src) + ', port_dst:' + str(self.port_dst) + '}'
 
 
 class DataV2:
@@ -392,9 +394,6 @@ class DataV2:
 
 class FlowInfoV2:
     def __init__(self, start_interval, data, udp_idle_interval):
-        if data is None:
-            print('Data is none')
-
         self.start_interval = start_interval
         self.status = STATUS_ACTIVE
         self.match = MatchV2(data)
@@ -438,6 +437,9 @@ class FlowInfoV2:
 
     def create_opposite_entry(self):
         return self.match.create_opposite_entry()
+
+    def to_string_match(self):
+        return self.match.to_string()
 
     # -----------------------------------------COUNTERS FUNCTIONS-------------------------------------------------------
 
@@ -483,6 +485,14 @@ def find_flow(flows_list, key):
     return -1
 
 
+def insert_into_sorted_list(flow_list, flow):
+    i = 0
+    while i < len(flow_list) and flow_list[i].compare_flows(flow) == 1:
+        i = i + 1
+    flow_list.insert(i, flow)
+    return flow_list
+
+
 class FlowDataTableV2:
     def __init__(self, udp_interval):
         self.active_flows = []
@@ -493,20 +503,12 @@ class FlowDataTableV2:
 
     # public
     def on_add_flow(self, info):
-        if info is None:
-            print('Info is None')
         new_flow = FlowInfoV2(start_interval=self.interval, data=info, udp_idle_interval=self.udp_interval)
         if new_flow.is_dns_communication():
-            self.dns_flows.append(new_flow)
+            self.dns_flows = insert_into_sorted_list(self.dns_flows, new_flow)
             new_flow.process_dns()
         else:
-            self.insert_to_active_flows(new_flow)
-
-    def insert_to_active_flows(self, flow):
-        i = 0
-        while i < len(self.active_flows) and self.active_flows[i].compare_flows(flow) == -1:
-            i = i + 1
-        self.active_flows.insert(i, flow)
+            self.active_flows = insert_into_sorted_list(self.active_flows, new_flow)
 
     # public
     def on_update(self, data):
@@ -516,13 +518,12 @@ class FlowDataTableV2:
     def update_active_flows_table(self, sorted_data):
         i = 0
         j = 0
-        while i < len(sorted_data) and (j < len(self.active_flows)):
+        while (i < len(sorted_data)) and (j < len(self.active_flows)):
             value = self.active_flows[j].compare_match_to_entry(sorted_data[i])
 
             if value < 0:
                 # There is a flow that we are unaware of - could be that the first package in .pcap is tcp finish
                 i = i + 1
-                j = j + 1
             elif value > 0:
                 # finished flow, no input for it
                 j = j + 1
@@ -532,6 +533,15 @@ class FlowDataTableV2:
                 j = j + 1
 
         self.interval = self.interval + 1
+
+    def list_to_string(self):
+        i = 0
+        s = ''
+        while i < len(self.active_flows):
+            s = s + self.active_flows[i].to_string_match() + '\n'
+            i = i + 1
+
+        return s
 
     def update_flow_status(self):
         i = 0
@@ -955,21 +965,22 @@ class SwitchController(app_manager.RyuApp):
     def flow_removal_handler(self, ev):
         flow_data = extract_match_data(ev.msg.match)
 
-        # add stats data
+        # ipv6 not supported at the moment
         if flow_data is not None:
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
-            #print('TCP flags data -> ' + str(flow_data))
             self.dataTable.on_flow_removed(flow_data)
 
     def save_tcp_flags_packet_info(self, packet):
         data = extract_data_from_pkt(packet)
-        #print('TCP flags data -> ' + str(data))
-        self.dataTable.on_tcp_flags_package(data)
+
+        # ipv6 not supported at the moment
+        if data is not None:
+            self.dataTable.on_tcp_flags_package(data)
 
     def add_flow_to_stats_table(self, packet):
         data = extract_data_from_pkt(packet)
-        if data is None:
-            print('Packet given data which is None: ' + str(packet))
-        #print('First packet data -> ' + str(data))
-        self.dataTable.on_add_flow(data)
+
+        # ipv6 not supported at the moment
+        if data is not None:
+            self.dataTable.on_add_flow(data)
