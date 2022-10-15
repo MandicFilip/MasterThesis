@@ -29,11 +29,11 @@ from ryu.lib import hub
 
 from flow.storage import init_finished_flows_storage
 from flow.table import FlowDataTable
-from input import input
+from v2 import inputV2
 from ryu import cfg
 
 
-import shlex, subprocess
+import subprocess
 
 ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
@@ -88,7 +88,7 @@ class StatsCollector(app_manager.RyuApp):
     @set_ev_cls(ofp_event.EventOFPDescStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
         try:
-            data = input.get_statistics()
+            data = inputV2.get_statistics()
             self.dataTable.on_update(data)
 
             self.save_counter = self.save_counter + 1
@@ -103,7 +103,7 @@ class StatsCollector(app_manager.RyuApp):
     # merged
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
-        flow_data = input.extract_match_data(ev.msg.match)
+        flow_data = inputV2.extract_match_data(ev.msg.match)
 
         # add stats data
         if flow_data is not None:

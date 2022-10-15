@@ -1,7 +1,5 @@
-
-from flow.storage import save_active_flows, save_finished_flows
-from flow.v2.flowV2 import FlowInfoV2
-from ryu.ryu.lib.packet import in_proto
+from v2.storageV2 import save_active_flows, save_finished_flows
+from v2.flowV2 import FlowInfoV2
 
 
 def find_flow(flows_list, key):

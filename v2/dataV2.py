@@ -4,7 +4,7 @@
 # Reseno azuriranje usled prvog i poslednjeg (kod tcp-a) paketa
 
 
-class FlowData:
+class DataV2:
     # public data -> hash map with byte_count and packet_count
     def __init__(self, data, udp_padding):
         self.establish_flow_byte_count = data['byte_count']

@@ -1,5 +1,5 @@
-from flow.v2.flow_dataV2 import FlowData
-from flow.v2.match import Match
+from v2 import DataV2
+from v2.match import MatchV2
 
 MIN_LENGTH = 2
 DNS_PORT = 53
@@ -13,8 +13,8 @@ class FlowInfoV2:
     def __init__(self, start_interval, entry, data, udp_idle_interval):
         self.start_interval = start_interval
         self.status = STATUS_ACTIVE
-        self.match = Match(entry)
-        self.data = FlowData(data, udp_idle_interval)
+        self.match = MatchV2(entry)
+        self.data = DataV2(data, udp_idle_interval)
         self.udp_idle_interval = udp_idle_interval
         self.pair = None
 

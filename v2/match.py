@@ -3,7 +3,7 @@ from ryu.ryu.lib.packet import in_proto
 DNS_PORT = 53
 
 
-class Match:
+class MatchV2:
     def __init__(self, entry):
         self.ip_src = entry['ip_src']
         self.ip_dst = entry['ip_dst']

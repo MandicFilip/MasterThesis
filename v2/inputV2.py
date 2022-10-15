@@ -1,6 +1,8 @@
-from ryu.ryu.lib.packet import in_proto
+import shlex
+import subprocess
 from operator import itemgetter
-import shlex, subprocess
+
+from ryu.ryu.lib.packet import in_proto
 
 TCP_UDP_PRIORITY_LEVEL = 2
 
