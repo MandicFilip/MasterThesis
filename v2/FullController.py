@@ -155,21 +155,21 @@ def get_statistics():
 
 def stringify_statistics(flow):
     stats = ""
-    stats = stats + str(flow.byte_mean) + " "
-    stats = stats + str(flow.byte_median) + " "
-    stats = stats + str(flow.byte_mode) + " "
-    stats = stats + str(flow.byte_standard_deviation) + " "
-    stats = stats + str(flow.byte_fisher_skew) + " "
-    stats = stats + str(flow.byte_fisher_kurtosis) + " "
-    stats = stats + str(flow.byte_correlation) + "\n"
+    stats = stats + str(flow.data.byte_mean) + " "
+    stats = stats + str(flow.data.byte_median) + " "
+    stats = stats + str(flow.data.byte_mode) + " "
+    stats = stats + str(flow.data.byte_standard_deviation) + " "
+    stats = stats + str(flow.data.byte_fisher_skew) + " "
+    stats = stats + str(flow.data.byte_fisher_kurtosis) + " "
+    stats = stats + str(flow.data.byte_correlation) + "\n"
 
-    stats = stats + str(flow.packet_mean) + " "
-    stats = stats + str(flow.packet_median) + " "
-    stats = stats + str(flow.packet_mode) + " "
-    stats = stats + str(flow.packet_standard_deviation) + " "
-    stats = stats + str(flow.packet_fisher_skew) + " "
-    stats = stats + str(flow.packet_fisher_kurtosis) + " "
-    stats = stats + str(flow.packet_correlation) + "\n"
+    stats = stats + str(flow.data.packet_mean) + " "
+    stats = stats + str(flow.data.packet_median) + " "
+    stats = stats + str(flow.data.packet_mode) + " "
+    stats = stats + str(flow.data.packet_standard_deviation) + " "
+    stats = stats + str(flow.data.packet_fisher_skew) + " "
+    stats = stats + str(flow.data.packet_fisher_kurtosis) + " "
+    stats = stats + str(flow.data.packet_correlation) + "\n"
     return stats
 
 
@@ -187,7 +187,7 @@ def format_flow_info(flow):
     flow_string = flow_string + str(flow.data.byte_count_list) + "\n"
     flow_string = flow_string + str(flow.data.packet_count_list) + "\n"
 
-    # flow_string = flow_string + stringify_statistics(flow) + "\n"
+    flow_string = flow_string + stringify_statistics(flow) + "\n"
     return flow_string
 
 
@@ -422,7 +422,7 @@ class DataV2:
         return byte_count, packet_count
 
     def calc_self_stats(self):
-        if len(self.byte_count_list) < MIN_LENGTH:
+        if len(self.byte_count_list) > MIN_LENGTH:
             self.calc_mean()
             self.calc_median()
             self.calc_mode()
@@ -539,20 +539,20 @@ class FlowInfoV2:
     def to_string_match(self):
         return self.match.to_string()
 
-    def align_tcp_interval_start(self, pair):
-        if self.match.is_tcp() and pair.match.is_tcp():
-            pair_start = pair.get_start_interval()
+    def align_tcp_interval_start(self):
+        if self.match.is_tcp() and self.pair.match.is_tcp():
+            pair_start = self.pair.get_start_interval()
             if self.start_interval == pair_start + 1:
                 self.delay_start_interval()
                 return
 
             if self.start_interval == pair_start - 1:
-                pair.delay_start_interval()
+                self.pair.delay_start_interval()
                 return
 
             if self.start_interval < pair_start:
                 diff = pair_start - self.start_interval
-                pair.align_permanently_flow_beginnings(diff)
+                self.pair.align_permanently_flow_beginnings(diff)
 
             if self.start_interval > pair_start:
                 diff = self.start_interval - pair_start
