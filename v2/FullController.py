@@ -455,9 +455,31 @@ class DataV2:
         self.packet_fisher_kurtosis = scipy.stats.kurtosis(self.packet_count_list)
 
     def calc_correlation(self, pair_byte_list, pair_packet_list):
-        if len(self.byte_count_list) < MIN_LENGTH:
+        if len(self.byte_count_list) > MIN_LENGTH:
             self.byte_correlation = scipy.stats.pearsonr(self.byte_count_list, pair_byte_list)
             self.packet_correlation = scipy.stats.pearsonr(self.packet_count_list, pair_packet_list)
+
+    def reset_stats(self):
+        self.byte_mean = 0
+        self.packet_mean = 0
+
+        self.byte_median = 0
+        self.packet_median = 0
+
+        self.byte_mode = 0
+        self.packet_mode = 0
+
+        self.byte_standard_deviation = 0
+        self.packet_standard_deviation = 0
+
+        self.byte_fisher_skew = 0
+        self.packet_fisher_skew = 0
+
+        self.byte_fisher_kurtosis = 0
+        self.packet_fisher_kurtosis = 0
+
+        self.byte_correlation = 0
+        self.packet_correlation = 0
 
     def push_front(self, count, val):
         for x in range(count):
@@ -480,7 +502,7 @@ class DataV2:
             self.packet_count_list.pop()
 
     def delay_start(self):
-        if len(self.byte_count_list) == 1:
+        if len(self.byte_count_list) < 2:
             return
 
         first_interval_bytes = self.byte_count_list.pop(0)
@@ -606,6 +628,8 @@ class FlowInfoV2:
         self.data.add_final_data(total_byte_count, total_packet_count)
         if self.match.is_udp():
             self.data.remove_udp_padding()
+            if self.get_data_lists_length() < MIN_LENGTH:
+                self.data.reset_stats()
 
     def process_dns(self):
         self.data.append_data(0, 0)
@@ -626,6 +650,7 @@ class FlowInfoV2:
         pair_end_diff = 0
 
         pair_start = self.pair.get_start_interval()
+
         if self.start_interval < pair_start:
             pair_start_diff = pair_start - self.start_interval
             self.pair.add_front_alignment(pair_start_diff)
@@ -638,12 +663,12 @@ class FlowInfoV2:
         pair_list_len = self.pair.get_data_lists_length()
 
         if self_list_len < pair_list_len:
-            pair_end_diff = pair_list_len - self_list_len
-            self.pair.add_back_alignment(pair_end_diff)
+            self_end_diff = pair_list_len - self_list_len
+            self.add_back_alignment(self_end_diff)
 
         if self_list_len > pair_list_len:
-            self_end_diff = self_list_len - pair_list_len
-            self.add_back_alignment(self_end_diff)
+            pair_end_diff = self_list_len - pair_list_len
+            self.pair.add_back_alignment(pair_end_diff)
 
         return self_start_diff, self_end_diff, pair_start_diff, pair_end_diff
 
