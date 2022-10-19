@@ -50,6 +50,7 @@ STATUS_WAITING = 2
 STATUS_FINISHED = 3
 
 DNS_PORT = 53
+ETHERNET_HEADER_SIZE_IN_BYTES = 14
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------INPUT-----------------------------------------------------------
@@ -872,14 +873,15 @@ def extract_data_from_pkt(pkt):
     ip = pkt.get_protocol(ipv4.ipv4)
     protocol = ip.proto
 
+    bytes_count = int(ip.total_length) + ETHERNET_HEADER_SIZE_IN_BYTES
     if protocol == in_proto.IPPROTO_TCP:
         tcp_p = pkt.get_protocol(tcp.tcp)
         return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_TCP, 'byte_count': int(ip.total_length), 'packet_count': 1}
+                'protocol_code': in_proto.IPPROTO_TCP, 'byte_count': bytes_count, 'packet_count': 1}
     elif protocol == in_proto.IPPROTO_UDP:
         udp_p = pkt.get_protocol(udp.udp)
         return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_UDP, 'byte_count': int(ip.total_length), 'packet_count': 1}
+                'protocol_code': in_proto.IPPROTO_UDP, 'byte_count': bytes_count, 'packet_count': 1}
     return None
 
 
