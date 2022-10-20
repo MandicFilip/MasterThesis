@@ -52,6 +52,20 @@ STATUS_FINISHED = 3
 DNS_PORT = 53
 ETHERNET_HEADER_SIZE_IN_BYTES = 14
 
+
+# ------------------------------------------------------DEBUG-----------------------------------------------------------
+
+def match_to_string(match):
+    match_str = '{'
+    match_str = match_str + 'ip_src: ' + match['ip_src'] + ', '
+    match_str = match_str + 'ip_dst: ' + match['ip_dst'] + ', '
+    match_str = match_str + 'port_src: ' + str(match['port_src']) + ', '
+    match_str = match_str + 'port_dst: ' + str(match['port_dst']) + ', '
+    match_str = match_str + 'protocol_code: ' + str(match['protocol_code']) + ', '
+    match_str = match_str + 'byte_count: ' + str(match['byte_count']) + ', '
+    match_str = match_str + 'packet_count: ' + str(match['packet_count']) + '}'
+    return match_str
+
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------INPUT-----------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -122,21 +136,6 @@ def process_flow_data(output):
     data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
 
     return data
-
-
-def extract_match_data(match):
-    match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
-
-    if match['ip_proto'] == in_proto.IPPROTO_TCP:
-        match_map['port_src'] = match['tcp_src']
-        match_map['port_dst'] = match['tcp_dst']
-    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
-        match_map['port_src'] = match['udp_src']
-        match_map['port_dst'] = match['udp_dst']
-    else:
-        return None
-
-    return match_map
 
 
 GET_STATISTICS_COMMAND = 'sudo ovs-ofctl -O openflow15 dump-flows s1'
@@ -809,7 +808,6 @@ class FlowDataTableV2:
 
     # public
     def on_tcp_flags_package(self, tcp_flow_data):
-        print('TCP flags processing')
         index = self.find_active_flow(tcp_flow_data)
         if index != -1:
             flow = self.active_flows[index]
@@ -865,7 +863,7 @@ class FlowDataTableV2:
 # ----------------------------------------------------------------------------------------------------------------------
 
 
-def extract_data_from_pkt(pkt):
+def extract_match_from_packet(pkt):
     eth = pkt.get_protocols(ethernet.ethernet)[0]
     if eth.ethertype != ether_types.ETH_TYPE_IP:
         return None
@@ -883,6 +881,31 @@ def extract_data_from_pkt(pkt):
         return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
                 'protocol_code': in_proto.IPPROTO_UDP, 'byte_count': bytes_count, 'packet_count': 1}
     return None
+
+
+def extract_match_data_from_removed_message(match):
+    match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
+
+    if match['ip_proto'] == in_proto.IPPROTO_TCP:
+        match_map['port_src'] = match['tcp_src']
+        match_map['port_dst'] = match['tcp_dst']
+    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
+        match_map['port_src'] = match['udp_src']
+        match_map['port_dst'] = match['udp_dst']
+    else:
+        return None
+
+    return match_map
+
+
+def extract_counters_from_packet(pkt):
+    eth = pkt.get_protocols(ethernet.ethernet)[0]
+    if eth.ethertype != ether_types.ETH_TYPE_IP:
+        return None
+
+    ip = pkt.get_protocol(ipv4.ipv4)
+    bytes_count = int(ip.total_length) + ETHERNET_HEADER_SIZE_IN_BYTES
+    return {'byte_count': bytes_count, 'packet_count': 1}
 
 
 def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
@@ -1033,20 +1056,13 @@ class SwitchController(app_manager.RyuApp):
                                  tcp_dst=tcp_p.dst_port,
                                  ip_proto=protocol)
 
-        match2 = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
-                                 ipv4_src=ip.dst,
-                                 ipv4_dst=ip.src,
-                                 tcp_src=tcp_p.dst_port,
-                                 tcp_dst=tcp_p.src_port,
-                                 ip_proto=protocol)
-
         if buffer_id == ofproto.OFP_NO_BUFFER:
             buffer_id = None
 
         # Give some time for peers to finish communication and then remove flow from table
-        hub.spawn(self.delete_tcp_flow_pair, datapath, match1, match2, actions, buffer_id)
+        hub.spawn(self.delete_tcp_flow_pair, datapath, match1, actions, buffer_id)
 
-    def delete_tcp_flow_pair(self, datapath, match1, match2, actions, buffer_id=None):
+    def delete_tcp_flow_pair(self, datapath, match1, actions, buffer_id=None):
         # wait for session to be closed
         hub.sleep(self.CONF.DELETE_INTERVAL)
 
@@ -1076,22 +1092,6 @@ class SwitchController(app_manager.RyuApp):
                                 ofproto.OFPFF_SEND_FLOW_REM,
                                 importance,
                                 match1,
-                                inst)
-        datapath.send_msg(mod)
-
-        mod = parser.OFPFlowMod(datapath,
-                                cookie,
-                                cookie_mask,
-                                table_id,
-                                ofproto.OFPFC_DELETE,
-                                idle_timeout,
-                                hard_timeout,
-                                priority,
-                                buffer_id,
-                                ofproto.OFPP_ANY, ofproto.OFPG_ANY,
-                                ofproto.OFPFF_SEND_FLOW_REM,
-                                importance,
-                                match2,
                                 inst)
         datapath.send_msg(mod)
 
@@ -1198,25 +1198,33 @@ class SwitchController(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
     def flow_removal_handler(self, ev):
-        flow_data = extract_match_data(ev.msg.match)
+        flow_data = extract_match_data_from_removed_message(ev.msg.match)
 
         # ipv6 not supported at the moment
         if flow_data is not None:
             flow_data['byte_count'] = ev.msg.stats['byte_count']
             flow_data['packet_count'] = ev.msg.stats['packet_count']
+            if flow_data['protocol_code'] == 6:
+                print('Removing tcp flow   : ' + match_to_string(flow_data) + '\n')
             self.dataTable.on_flow_removed(flow_data)
 
     def save_tcp_flags_packet_info(self, packet):
-        data = extract_data_from_pkt(packet)
-        print('Controller -> TCP flags processing ')
+        data = extract_match_from_packet(packet)
 
         # ipv6 not supported at the moment
         if data is not None:
+            counters = extract_counters_from_packet(packet)
+            data['byte_count'] = counters['byte_count']
+            data['packet_count'] = counters['packet_count']
+            print('TCP flags processing: ' + match_to_string(data) + '\n')
             self.dataTable.on_tcp_flags_package(data)
 
     def add_flow_to_stats_table(self, packet):
-        data = extract_data_from_pkt(packet)
+        data = extract_match_from_packet(packet)
 
         # ipv6 not supported at the moment
         if data is not None:
+            counters = extract_counters_from_packet(packet)
+            data['byte_count'] = counters['byte_count']
+            data['packet_count'] = counters['packet_count']
             self.dataTable.on_add_flow(data)
