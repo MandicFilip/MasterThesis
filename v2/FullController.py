@@ -62,8 +62,6 @@ def match_to_string(match):
     match_str = match_str + 'port_src: ' + str(match['port_src']) + ', '
     match_str = match_str + 'port_dst: ' + str(match['port_dst']) + ', '
     match_str = match_str + 'protocol_code: ' + str(match['protocol_code']) + ', '
-    match_str = match_str + 'byte_count: ' + str(match['byte_count']) + ', '
-    match_str = match_str + 'packet_count: ' + str(match['packet_count']) + '}'
     return match_str
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -329,8 +327,8 @@ class MatchV2:
 class DataV2:
     # public data -> hash map with byte_count and packet_count
     def __init__(self, data, udp_padding):
-        self.establish_flow_byte_count = data['byte_count']
-        self.establish_flow_packet_count = data['packet_count']
+        self.additional_bytes = data['byte_count']
+        self.additional_packets = data['packet_count']
 
         self.previous_byte_count = 0
         self.previous_packet_count = 0
@@ -338,9 +336,6 @@ class DataV2:
         self.packet_count_list = []
 
         self.udp_padding = udp_padding
-        self.tcp_flags_byte_count = 0
-        self.tcp_flags_packet_count = 0
-        self.tcp_flags_interval = 0
 
         self.byte_mean = 0
         self.packet_mean = 0
@@ -370,49 +365,27 @@ class DataV2:
     def append_data(self, total_byte_count, total_packet_count):
         byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
 
-        if len(self.byte_count_list) == 0:
-            byte_count = byte_count + self.establish_flow_byte_count
-        self.byte_count_list.append(byte_count)
+        byte_count = byte_count + self.additional_bytes
+        packet_count = packet_count + self.additional_packets
 
-        if len(self.packet_count_list) == 0:
-            packet_count = packet_count + self.establish_flow_packet_count
+        self.byte_count_list.append(byte_count)
         self.packet_count_list.append(packet_count)
 
         self.previous_byte_count = total_byte_count
         self.previous_packet_count = total_packet_count
 
-    # public - called from removed
-    def add_final_data(self, total_byte_count, total_packet_count):
-        byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
-
-        if len(self.byte_count_list) > 0:
-            if self.tcp_flags_interval > 0:
-                if self.tcp_flags_interval == len(self.byte_count_list):
-                    self.byte_count_list.append(byte_count + self.tcp_flags_byte_count)
-                else:
-                    self.byte_count_list[-1] = self.byte_count_list[-1] + byte_count + self.tcp_flags_byte_count
-        else:
-            self.byte_count_list.append(self.establish_flow_byte_count + byte_count + self.tcp_flags_byte_count)
-
-        if len(self.packet_count_list) > 0:
-            if self.tcp_flags_interval > 0:
-                if self.tcp_flags_interval == len(self.packet_count_list):
-                    self.packet_count_list.append(packet_count + self.tcp_flags_packet_count)
-                else:
-                    self.packet_count_list[-1] = self.packet_count_list[-1] + packet_count + self.tcp_flags_packet_count
-        else:
-            self.packet_count_list.append(self.establish_flow_packet_count + packet_count + self.tcp_flags_packet_count)
+        self.additional_bytes = 0
+        self.additional_packets = 0
 
     # public - called from tcp flags
     def add_tcp_flags_data(self, byte_count, packet_count):
-        self.tcp_flags_byte_count = byte_count
-        self.tcp_flags_packet_count = packet_count
-        self.tcp_flags_interval = len(self.byte_count_list)
+        self.additional_bytes = byte_count
+        self.additional_packets = packet_count
 
     # public - called from removed
     def remove_udp_padding(self):
         # there is no way to byte_count = 0 and packet_count <> 0, we can check only byte_count
-        while self.byte_count_list[-1] == 0:
+        while len(self.byte_count_list) > 0 and self.byte_count_list[-1] == 0:
             del self.byte_count_list[-1:]
             del self.packet_count_list[-1:]
 
@@ -520,6 +493,7 @@ class FlowInfoV2:
         self.data = DataV2(data, udp_idle_interval)
         self.udp_idle_interval = udp_idle_interval
         self.pair = None
+        self.tcp_finished_flag = False
 
     # -----------------------------------------MATCH FUNCTIONS----------------------------------------------------------
     def compare_match_to_entry(self, entry):
@@ -610,26 +584,37 @@ class FlowInfoV2:
     def remove_back_alignment(self, count):
         self.data.pop_back(count)
 
+    def deactivate_flow(self):
+        if self.pair is None:
+            self.status = STATUS_FINISHED
+        else:
+            self.status = STATUS_WAITING
+
+    def has_tcp_finished_flag(self):
+        return self.tcp_finished_flag
+
     # -----------------------------------------COUNTERS FUNCTIONS-------------------------------------------------------
 
     def update_counters(self, total_byte_count, total_packet_count):
         if self.status == STATUS_ACTIVE:
             self.data.append_data(total_byte_count, total_packet_count)
 
+        if self.tcp_finished_flag:
+            self.deactivate_flow()
+
     def add_last_tcp_package_data(self, byte_count, packet_count):
+        self.tcp_finished_flag = True
         self.data.add_tcp_flags_data(byte_count, packet_count)
 
-    def on_flow_removed(self, total_byte_count, total_packet_count):
-        if self.pair is None:
-            self.status = STATUS_FINISHED
-        else:
-            self.status = STATUS_WAITING
-
-        self.data.add_final_data(total_byte_count, total_packet_count)
+    def on_flow_removed(self):
         if self.match.is_udp():
+            self.deactivate_flow()
             self.data.remove_udp_padding()
             if self.get_data_lists_length() < MIN_LENGTH:
                 self.data.reset_stats()
+        else:
+            if not self.tcp_finished_flag:
+                self.deactivate_flow()
 
     def process_dns(self):
         self.data.append_data(0, 0)
@@ -722,6 +707,7 @@ class FlowDataTableV2:
         self.interval = 0
         self.udp_interval = udp_interval
         self.dns_flows = []
+        self.dump_counter = 1
 
     # public
     def on_add_flow(self, info):
@@ -748,6 +734,8 @@ class FlowDataTableV2:
                 i = i + 1
             elif value > 0:
                 # finished flow, no input for it
+                if self.active_flows[j].has_tcp_finished_flag() and self.active_flows[j].is_active():
+                    self.active_flows[j].deactivate_flow()
                 j = j + 1
             else:
                 self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
@@ -777,7 +765,13 @@ class FlowDataTableV2:
                             flow.set_pair(pair)
                             pair.set_pair(flow)
                             flow.align_tcp_interval_start()
-            i = i + 1
+                i = i + 1
+            else:
+                if flow.has_tcp_finished_flag():
+                    self.finished_flows.append(flow)
+                    self.active_flows.pop(i)
+                else:
+                    i = i + 1
 
         i = 0
         while i < len(self.finished_flows):
@@ -794,8 +788,8 @@ class FlowDataTableV2:
         index = self.find_active_flow(removed_flow_data)
         if index != -1:
             flow = self.active_flows[index]
-            flow.on_flow_removed(removed_flow_data['byte_count'], removed_flow_data['packet_count'])
-            # try to find a pair
+            flow.on_flow_removed()
+
             self.finished_flows.append(flow)
             self.active_flows.pop(index)
         else:
@@ -808,10 +802,15 @@ class FlowDataTableV2:
 
     # public
     def on_tcp_flags_package(self, tcp_flow_data):
+        print('Table -> TCP flags processing: ' + match_to_string(tcp_flow_data))
         index = self.find_active_flow(tcp_flow_data)
         if index != -1:
+            print('Table -> Found tcp flow: ' + str(tcp_flow_data))
             flow = self.active_flows[index]
             flow.add_last_tcp_package_data(tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
+        else:
+            print('Table -> Can\'t find tcp flow: ' + str(tcp_flow_data) + '\n')
+            self.dump_table(str(tcp_flow_data))
 
     def clear_finished_flows(self):
         # remove all flows marked as finished
@@ -858,6 +857,19 @@ class FlowDataTableV2:
         for flow in self.finished_flows:
             flow.calc_stats()
 
+    def dump_table(self, flow_str):
+        filename = 'table_' + str(self.dump_counter)
+        self.dump_counter = self.dump_counter + 1
+
+        file = open(filename, "w+")
+        file.write('Flow: ' + flow_str + '\n\n')
+        file.write('Table: ' + '\n')
+        for flow in self.active_flows:
+            file.write(flow.to_string_match())
+            file.write("\n")
+
+        file.close()
+
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------CONTROLLER--------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -896,16 +908,6 @@ def extract_match_data_from_removed_message(match):
         return None
 
     return match_map
-
-
-def extract_counters_from_packet(pkt):
-    eth = pkt.get_protocols(ethernet.ethernet)[0]
-    if eth.ethertype != ether_types.ETH_TYPE_IP:
-        return None
-
-    ip = pkt.get_protocol(ipv4.ipv4)
-    bytes_count = int(ip.total_length) + ETHERNET_HEADER_SIZE_IN_BYTES
-    return {'byte_count': bytes_count, 'packet_count': 1}
 
 
 def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
@@ -1166,10 +1168,10 @@ class SwitchController(app_manager.RyuApp):
 
         if is_tcp_flags_packet(pkt, eth):
             self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
-            self.save_tcp_flags_packet_info(pkt)
+            self.save_tcp_flags_packet_info(msg, eth, pkt)
         else:
             self.install_flow(datapath, msg, pkt, eth, out_port, actions)
-            self.add_flow_to_stats_table(pkt)
+            self.add_flow_to_stats_table(msg, pkt)
 
         forward_packet(datapath, msg, in_port, actions)
 
@@ -1202,29 +1204,22 @@ class SwitchController(app_manager.RyuApp):
 
         # ipv6 not supported at the moment
         if flow_data is not None:
-            flow_data['byte_count'] = ev.msg.stats['byte_count']
-            flow_data['packet_count'] = ev.msg.stats['packet_count']
-            if flow_data['protocol_code'] == 6:
-                print('Removing tcp flow   : ' + match_to_string(flow_data) + '\n')
             self.dataTable.on_flow_removed(flow_data)
 
-    def save_tcp_flags_packet_info(self, packet):
+    def save_tcp_flags_packet_info(self, msg, eth, packet):
         data = extract_match_from_packet(packet)
 
         # ipv6 not supported at the moment
         if data is not None:
-            counters = extract_counters_from_packet(packet)
-            data['byte_count'] = counters['byte_count']
-            data['packet_count'] = counters['packet_count']
-            print('TCP flags processing: ' + match_to_string(data) + '\n')
+            data['byte_count'] = msg.total_len
+            data['packet_count'] = 1
             self.dataTable.on_tcp_flags_package(data)
 
-    def add_flow_to_stats_table(self, packet):
+    def add_flow_to_stats_table(self, msg, packet):
         data = extract_match_from_packet(packet)
 
         # ipv6 not supported at the moment
         if data is not None:
-            counters = extract_counters_from_packet(packet)
-            data['byte_count'] = counters['byte_count']
-            data['packet_count'] = counters['packet_count']
+            data['byte_count'] = msg.total_len
+            data['packet_count'] = 1
             self.dataTable.on_add_flow(data)
