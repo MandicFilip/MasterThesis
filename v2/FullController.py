@@ -61,7 +61,7 @@ def match_to_string(match):
     match_str = match_str + 'ip_dst: ' + match['ip_dst'] + ', '
     match_str = match_str + 'port_src: ' + str(match['port_src']) + ', '
     match_str = match_str + 'port_dst: ' + str(match['port_dst']) + ', '
-    match_str = match_str + 'protocol_code: ' + str(match['protocol_code']) + ', '
+    match_str = match_str + 'protocol_code: ' + str(match['protocol_code']) + '} '
     return match_str
 
 # ----------------------------------------------------------------------------------------------------------------------
@@ -603,8 +603,11 @@ class FlowInfoV2:
             self.deactivate_flow()
 
     def add_last_tcp_package_data(self, byte_count, packet_count):
-        self.tcp_finished_flag = True
+        self.set_tcp_finished_flag()
         self.data.add_tcp_flags_data(byte_count, packet_count)
+
+    def set_tcp_finished_flag(self):
+        self.tcp_finished_flag = True
 
     def on_flow_removed(self):
         if self.match.is_udp():
@@ -717,6 +720,7 @@ class FlowDataTableV2:
             new_flow.process_dns()
         else:
             self.active_flows = insert_into_sorted_list(self.active_flows, new_flow)
+        return new_flow
 
     # public
     def on_update(self, data):
@@ -804,13 +808,16 @@ class FlowDataTableV2:
     def on_tcp_flags_package(self, tcp_flow_data):
         print('Table -> TCP flags processing: ' + match_to_string(tcp_flow_data))
         index = self.find_active_flow(tcp_flow_data)
-        if index != -1:
+        exists = index != -1
+        if exists:
             print('Table -> Found tcp flow: ' + str(tcp_flow_data))
             flow = self.active_flows[index]
             flow.add_last_tcp_package_data(tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
         else:
-            print('Table -> Can\'t find tcp flow: ' + str(tcp_flow_data) + '\n')
-            self.dump_table(str(tcp_flow_data))
+            # This is the first package in the flow
+            new_flow = self.on_add_flow(tcp_flow_data)
+            new_flow.set_tcp_finished_flag()
+        return exists
 
     def clear_finished_flows(self):
         # remove all flows marked as finished
@@ -1020,7 +1027,7 @@ class SwitchController(app_manager.RyuApp):
         add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
 
         # install tcp flags flow entry - we need packet with flags for tcp session end to remove flow from table
-        match = parser.OFPMatch(eth_type=0x0800, ip_proto=in_proto.IPPROTO_TCP, tcp_flags=(0x001 | 0x004))
+        match = parser.OFPMatch(eth_type=0x0800, ip_proto=in_proto.IPPROTO_TCP, tcp_flags=(0x0001 | 0x0004))
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
         add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
@@ -1167,8 +1174,10 @@ class SwitchController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(out_port)]
 
         if is_tcp_flags_packet(pkt, eth):
+            exists = self.save_tcp_flags_packet_info(msg, pkt)
+            if not exists:
+                self.install_flow(datapath, msg, pkt, eth, out_port, actions)
             self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
-            self.save_tcp_flags_packet_info(msg, eth, pkt)
         else:
             self.install_flow(datapath, msg, pkt, eth, out_port, actions)
             self.add_flow_to_stats_table(msg, pkt)
@@ -1204,16 +1213,19 @@ class SwitchController(app_manager.RyuApp):
 
         # ipv6 not supported at the moment
         if flow_data is not None:
+            if flow_data['protocol_code'] == 6:
+                print('Removing tcp flow   : ' + match_to_string(flow_data))
             self.dataTable.on_flow_removed(flow_data)
 
-    def save_tcp_flags_packet_info(self, msg, eth, packet):
+    def save_tcp_flags_packet_info(self, msg, packet):
         data = extract_match_from_packet(packet)
-
+        print('TCP flags processing: ' + match_to_string(data))
         # ipv6 not supported at the moment
         if data is not None:
             data['byte_count'] = msg.total_len
             data['packet_count'] = 1
-            self.dataTable.on_tcp_flags_package(data)
+            return self.dataTable.on_tcp_flags_package(data)
+        return True     # ignore this case
 
     def add_flow_to_stats_table(self, msg, packet):
         data = extract_match_from_packet(packet)
