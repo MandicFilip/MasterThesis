@@ -385,18 +385,22 @@ class DataV2:
         self.tcp_flags_interval = interval
 
     def on_tcp_remove_flow(self, interval, total_byte_count, total_packet_count):
-        if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
-            byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
+        byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
+        byte_count = byte_count + self.additional_bytes
+        packet_count = packet_count + self.additional_packets
 
-            self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
-            self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
+        if byte_count > 0:
+            if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
+                self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
+                self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
+            else:
+                self.byte_count_list.append(byte_count)
+                self.packet_count_list.append(packet_count)
 
-            self.additional_bytes = 0
-            self.additional_packets = 0
-            self.previous_byte_count = total_byte_count
-            self.previous_packet_count = total_packet_count
-        else:
-            self.append_data(total_byte_count, total_packet_count)
+        self.additional_bytes = 0
+        self.additional_packets = 0
+        self.previous_byte_count = total_byte_count
+        self.previous_packet_count = total_packet_count
 
     # public - called from removed
     def remove_udp_padding(self):
