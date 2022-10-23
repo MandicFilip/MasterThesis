@@ -1225,9 +1225,9 @@ class SwitchController(app_manager.RyuApp):
 
         # ipv6 not supported at the moment
         if flow_data is not None:
+            flow_data['byte_count'] = ev.msg.stats['byte_count']
+            flow_data['packet_count'] = ev.msg.stats['packet_count']
             if flow_data['protocol_code'] == 6:
-                flow_data['byte_count'] = 55
-                flow_data['packet_count'] = 3
                 print('Removing tcp flow   : ' + match_to_string(flow_data))
             self.dataTable.on_flow_removed(flow_data)
 
