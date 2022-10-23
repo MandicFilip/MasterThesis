@@ -329,6 +329,7 @@ class DataV2:
     def __init__(self, data, udp_padding):
         self.additional_bytes = data['byte_count']
         self.additional_packets = data['packet_count']
+        self.tcp_flags_interval = -1
 
         self.previous_byte_count = 0
         self.previous_packet_count = 0
@@ -378,9 +379,24 @@ class DataV2:
         self.additional_packets = 0
 
     # public - called from tcp flags
-    def add_tcp_flags_data(self, byte_count, packet_count):
+    def add_tcp_flags_data(self, interval, byte_count, packet_count):
         self.additional_bytes = byte_count
         self.additional_packets = packet_count
+        self.tcp_flags_interval = interval
+
+    def on_tcp_remove_flow(self, interval, total_byte_count, total_packet_count):
+        if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
+            byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
+
+            self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
+            self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
+
+            self.additional_bytes = 0
+            self.additional_packets = 0
+            self.previous_byte_count = total_byte_count
+            self.previous_packet_count = total_packet_count
+        else:
+            self.append_data(total_byte_count, total_packet_count)
 
     # public - called from removed
     def remove_udp_padding(self):
@@ -599,25 +615,21 @@ class FlowInfoV2:
         if self.status == STATUS_ACTIVE:
             self.data.append_data(total_byte_count, total_packet_count)
 
-        if self.tcp_finished_flag:
-            self.deactivate_flow()
-
-    def add_last_tcp_package_data(self, byte_count, packet_count):
+    def add_last_tcp_package_data(self, interval, byte_count, packet_count):
         self.set_tcp_finished_flag()
-        self.data.add_tcp_flags_data(byte_count, packet_count)
+        self.data.add_tcp_flags_data(interval, byte_count, packet_count)
 
     def set_tcp_finished_flag(self):
         self.tcp_finished_flag = True
 
-    def on_flow_removed(self):
+    def on_flow_removed(self, interval, byte_count, packet_count):
+        self.deactivate_flow()
         if self.match.is_udp():
-            self.deactivate_flow()
             self.data.remove_udp_padding()
             if self.get_data_lists_length() < MIN_LENGTH:
                 self.data.reset_stats()
         else:
-            if not self.tcp_finished_flag:
-                self.deactivate_flow()
+            self.data.on_tcp_remove_flow(interval, byte_count, packet_count)
 
     def process_dns(self):
         self.data.append_data(0, 0)
@@ -792,7 +804,7 @@ class FlowDataTableV2:
         index = self.find_active_flow(removed_flow_data)
         if index != -1:
             flow = self.active_flows[index]
-            flow.on_flow_removed()
+            flow.on_flow_removed(self.interval, removed_flow_data['byte_count'], removed_flow_data['packet_count'])
 
             self.finished_flows.append(flow)
             self.active_flows.pop(index)
@@ -812,7 +824,7 @@ class FlowDataTableV2:
         if exists:
             print('Table -> Found tcp flow: ' + str(tcp_flow_data))
             flow = self.active_flows[index]
-            flow.add_last_tcp_package_data(tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
+            flow.add_last_tcp_package_data(self.interval, tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
         else:
             # This is the first package in the flow
             new_flow = self.on_add_flow(tcp_flow_data)
@@ -1214,6 +1226,8 @@ class SwitchController(app_manager.RyuApp):
         # ipv6 not supported at the moment
         if flow_data is not None:
             if flow_data['protocol_code'] == 6:
+                flow_data['byte_count'] = 55
+                flow_data['packet_count'] = 3
                 print('Removing tcp flow   : ' + match_to_string(flow_data))
             self.dataTable.on_flow_removed(flow_data)
 
