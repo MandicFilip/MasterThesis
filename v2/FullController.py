@@ -376,33 +376,17 @@ class DataV2:
         self.additional_bytes = 0
         self.additional_packets = 0
 
+    def append_zeros(self):
+        self.append_data(self.previous_byte_count, self.previous_packet_count)
+
     # public - called from tcp flags
     def add_tcp_flags_data(self, interval, byte_count, packet_count):
         self.additional_bytes = byte_count
         self.additional_packets = packet_count
         self.tcp_flags_interval = interval
 
-    def on_tcp_remove_flow(self, interval, total_byte_count, total_packet_count):
-        byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
-        byte_count = byte_count + self.additional_bytes
-        packet_count = packet_count + self.additional_packets
-
-        if byte_count > 0:
-            if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
-                self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
-                self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
-            else:
-                self.byte_count_list.append(byte_count)
-                self.packet_count_list.append(packet_count)
-
-        self.additional_bytes = 0
-        self.additional_packets = 0
-        self.previous_byte_count = total_byte_count
-        self.previous_packet_count = total_packet_count
-
     # public - called from removed
     def remove_padding(self):
-        # there is no way to byte_count = 0 and packet_count <> 0, we can check only byte_count
         while len(self.byte_count_list) > 0 and self.byte_count_list[-1] == 0:
             del self.byte_count_list[-1:]
             del self.packet_count_list[-1:]
@@ -502,15 +486,31 @@ class DataV2:
         self.byte_count_list[0] = self.byte_count_list[0] + first_interval_bytes
         self.packet_count_list[0] = self.packet_count_list[0] + first_interval_packet
 
+    def is_inactive(self, threshold):
+        length = len(self.byte_count_list)
+        if length <= threshold:
+            return False
+
+        check_index = length - threshold
+        while check_index < length:
+            if self.byte_count_list[check_index] != 0:
+                return False
+            check_index = check_index + 1
+        return True
+
 
 class FlowInfoV2:
-    def __init__(self, start_interval, data):
+    def __init__(self, start_interval, data, tcp_threshold, udp_threshold):
         self.start_interval = start_interval
         self.status = STATUS_ACTIVE
         self.match = MatchV2(data)
         self.data = DataV2(data)
         self.pair = None
         self.tcp_finished_flag = False
+        if self.match.is_tcp():
+            self.threshold = tcp_threshold
+        else:
+            self.threshold = udp_threshold
 
     # -----------------------------------------MATCH FUNCTIONS----------------------------------------------------------
     def compare_match_to_entry(self, entry):
@@ -621,14 +621,6 @@ class FlowInfoV2:
     def set_tcp_finished_flag(self):
         self.tcp_finished_flag = True
 
-    def on_flow_removed(self, interval, byte_count, packet_count):
-        self.deactivate_flow()
-        if self.match.is_tcp():
-            self.data.on_tcp_remove_flow(interval, byte_count, packet_count)
-        self.data.remove_padding()
-        if self.get_data_lists_length() < MIN_LENGTH:
-            self.data.reset_stats()
-
     def process_dns(self):
         self.data.append_data(0, 0)
         self.status = STATUS_FINISHED
@@ -683,6 +675,16 @@ class FlowInfoV2:
         if pair_end_diff > 0:
             self.pair.remove_back_alignment(pair_end_diff)
 
+    def add_zeros(self):
+        self.data.append_zeros()
+
+    def update_status(self):
+        if self.data.is_inactive(self.threshold) or self.tcp_finished_flag:
+            self.deactivate_flow()
+            self.data.remove_padding()
+            if self.get_data_lists_length() < MIN_LENGTH:
+                self.data.reset_stats()
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------TABLE-----------------------------------------------------------
@@ -714,18 +716,20 @@ def insert_into_sorted_list(flow_list, flow):
 
 
 class FlowDataTableV2:
-    def __init__(self):
+    def __init__(self, tcp_idle_interval, udp_idle_interval):
         self.active_flows = []
         self.finished_flows = []
         self.interval = 0
         self.dns_flows = []
         self.add_counter = 0
         self.remove_counter = 0
+        self.tcp_idle_interval = tcp_idle_interval
+        self.udp_idle_interval = udp_idle_interval
 
     # public
     def on_add_flow(self, info):
         self.add_counter = self.add_counter + 1
-        new_flow = FlowInfoV2(start_interval=self.interval, data=info)
+        new_flow = FlowInfoV2(self.interval, info, self.tcp_idle_interval, self.udp_idle_interval)
         if new_flow.is_dns_communication():
             self.dns_flows = insert_into_sorted_list(self.dns_flows, new_flow)
             new_flow.process_dns()
@@ -749,14 +753,19 @@ class FlowDataTableV2:
                 i = i + 1
             elif value > 0:
                 # finished flow, no input for it
+                self.active_flows[j].add_zeros()
                 j = j + 1
             else:
                 self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
                 i = i + 1
                 j = j + 1
 
-        print('Interval:' + str(self.interval) + '   active_flows_size: ' + str(len(self.active_flows)) + '   finished_flows_size: ' + str(len(self.finished_flows)) + \
-              '   add_counter: ' + str(self.add_counter) + '   remove_counter: ' + str(self.remove_counter))
+        while j < len(self.active_flows):
+            self.active_flows[j].add_zeros()
+            j = j + 1
+
+        print('Interval:' + str(self.interval) + '   active_flows_size: ' + str(
+            len(self.active_flows)) + '   finished_flows_size: ' + str(len(self.finished_flows)))
         self.interval = self.interval + 1
 
     def list_to_string(self):
@@ -770,14 +779,11 @@ class FlowDataTableV2:
 
     def update_flow_status(self):
         i = 0
-        entry = {'ip_src': '52.113.43.53', 'ip_dst': '192.168.0.22', 'port_src': 3481, 'port_dst': 50045, 'protocol_code': 17}
-        while i < len(self.active_flows):
-            if self.active_flows[i].compare_match_to_entry(entry) == 0:
-                print(self.active_flows[i].to_string_match() + '   byte_count: ' + str(
-                    self.active_flows[i].data.previous_byte_count) + '   packet_count:' + str(
-                    self.active_flows[i].data.previous_packet_count))
 
+        while i < len(self.active_flows):
             flow = self.active_flows[i]
+            flow.update_status()
+
             if flow.is_active():
                 if not flow.has_pair():
                     pair = self.find_pair_for_flow(flow)
@@ -788,11 +794,8 @@ class FlowDataTableV2:
                             flow.align_tcp_interval_start()
                 i = i + 1
             else:
-                if flow.has_tcp_finished_flag():
-                    self.finished_flows.append(flow)
-                    self.active_flows.pop(i)
-                else:
-                    i = i + 1
+                self.finished_flows.append(flow)
+                self.active_flows.pop(i)
 
         i = 0
         while i < len(self.finished_flows):
@@ -804,23 +807,9 @@ class FlowDataTableV2:
                     pair.set_finished()
             i = i + 1
 
-        print('\n')
-
-    # public
-    def on_flow_removed(self, removed_flow_data):
-        self.remove_counter = self.remove_counter + 1
-        index = self.find_active_flow(removed_flow_data)
-        if index != -1:
-            flow = self.active_flows.pop(index)
-            flow.on_flow_removed(self.interval, removed_flow_data['byte_count'], removed_flow_data['packet_count'])
-            self.finished_flows.append(flow)
-        else:
-            index = self.find_dns_flow(removed_flow_data)
-            if index != -1:
-                flow = self.dns_flows.pop(index)
-                self.finished_flows.append(flow)
-            else:
-                print('Can not find finished flow\n' + str(removed_flow_data))
+        while len(self.dns_flows) > 0:
+            dns_flow = self.dns_flows.pop()
+            self.finished_flows.append(dns_flow)
 
     # public
     def on_tcp_flags_package(self, tcp_flow_data):
@@ -848,8 +837,14 @@ class FlowDataTableV2:
         self.calc_stats()
         save_active_flows(active_flows_file, self.active_flows)
         save_finished_flows(finished_flows_file, self.finished_flows)
-        save_finished_flows(finished_flows_file, self.dns_flows)
         self.clear_finished_flows()
+
+    def calc_stats(self):
+        for flow in self.active_flows:
+            flow.calc_stats()
+
+        for flow in self.finished_flows:
+            flow.calc_stats()
 
     def find_active_flow(self, key):
         return find_flow(self.active_flows, key)
@@ -865,29 +860,7 @@ class FlowDataTableV2:
         index = self.find_active_flow(key)
         if index != -1:
             return self.active_flows[index]
-
-        index = self.find_finish_flow(key)
-        if index != -1:
-            return self.finished_flows[index]
         return None
-
-    def calc_stats(self):
-        for flow in self.active_flows:
-            flow.calc_stats()
-
-        for flow in self.finished_flows:
-            flow.calc_stats()
-
-    def dump_table(self, flow_str):
-        filename = 'table_10'
-        file = open(filename, "w+")
-        file.write('Flow: ' + flow_str + '\n\n')
-        file.write('Table: ' + '\n')
-        for flow in self.active_flows:
-            file.write(flow.to_string_match())
-            file.write("\n")
-
-        file.close()
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ----------------------------------------------------CONTROLLER--------------------------------------------------------
@@ -954,7 +927,7 @@ def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None)
                             buffer_id,
                             ofproto.OFPP_ANY,
                             ofproto.OFPG_ANY,
-                            ofproto.OFPFF_SEND_FLOW_REM,
+                            0,
                             importance,
                             match,
                             inst)
@@ -974,7 +947,7 @@ def is_tcp_flags_packet(pkt, eth):
     tcp_p = pkt.get_protocol(tcp.tcp)
     tcp_flags = tcp_p.bits
 
-    if tcp_flags & 0x1 or tcp_flags & 0x4:
+    if tcp_flags & tcp.TCP_FIN or tcp_flags & tcp.TCP_RST:
         return True
 
     return False
@@ -1020,13 +993,10 @@ class SwitchController(app_manager.RyuApp):
         self.logger.info("Active flows file: " + self.CONF.ACTIVE_FLOWS_FILE)
         self.logger.info("Finished flows file: " + self.CONF.FINISHED_FLOWS_FILE)
 
-        self.dataTable = FlowDataTableV2()
+        self.dataTable = FlowDataTableV2(self.CONF.TCP_IDLE_TIMEOUT, self.CONF.UDP_IDLE_TIMEOUT)
         self.save_counter = 0
         init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
         self.stats_thread = hub.spawn(self.run_stats_thread)
-
-        self.add_counter = 0
-        self.remove_counter = 0
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -1117,7 +1087,7 @@ class SwitchController(app_manager.RyuApp):
                                 buffer_id,
                                 ofproto.OFPP_ANY,
                                 ofproto.OFPG_ANY,
-                                ofproto.OFPFF_SEND_FLOW_REM,
+                                0,
                                 importance,
                                 match1,
                                 inst)
@@ -1176,7 +1146,6 @@ class SwitchController(app_manager.RyuApp):
     def _packet_in_handler(self, ev):
         # If you hit this you might want to increase
         # the "miss_send_length" of your switch
-        self.add_counter = self.add_counter + 1
         if ev.msg.msg_len < ev.msg.total_len:
             self.logger.debug("packet truncated: only %s of %s bytes",
                               ev.msg.msg_len, ev.msg.total_len)
@@ -1221,23 +1190,11 @@ class SwitchController(app_manager.RyuApp):
             self.save_counter = self.save_counter + 1
             if self.save_counter == self.CONF.SAVE_INTERVAL:
                 self.save_counter = 0
-                print('Saving ' + '   controller_packet-in: ' + str(self.add_counter) + '   controller_remove_flow: ' + str(self.remove_counter))
                 self.dataTable.on_save_flows(self.CONF.ACTIVE_FLOWS_FILE, self.CONF.FINISHED_FLOWS_FILE)
 
         except subprocess.CalledProcessError as err:
             self.logger.info("Error collecting data")
             self.logger.debug(err)
-
-    @set_ev_cls(ofp_event.EventOFPFlowRemoved, MAIN_DISPATCHER)
-    def flow_removal_handler(self, ev):
-        self.remove_counter = self.remove_counter + 1
-        flow_data = extract_match_data_from_removed_message(ev.msg.match)
-
-        # ipv6 not supported at the moment
-        if flow_data is not None:
-            flow_data['byte_count'] = ev.msg.stats['byte_count']
-            flow_data['packet_count'] = ev.msg.stats['packet_count']
-            self.dataTable.on_flow_removed(flow_data)
 
     def save_tcp_flags_packet_info(self, msg, packet):
         data = extract_match_from_packet(packet)
