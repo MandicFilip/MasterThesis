@@ -1,8 +1,8 @@
 diff --git a/diff.txt b/diff.txt
-index 7da66fc..e69de29 100644
+index 7da66fc..e678a10 100644
 Binary files a/diff.txt and b/diff.txt differ
 diff --git a/v2/FullController.py b/v2/FullController.py
-index fffa675..89734ee 100644
+index 3e92d85..89734ee 100644
 --- a/v2/FullController.py
 +++ b/v2/FullController.py
 @@ -326,7 +326,7 @@ class MatchV2:
@@ -23,36 +23,8 @@ index fffa675..89734ee 100644
          self.byte_mean = 0
          self.packet_mean = 0
  
-@@ -385,21 +383,25 @@ class DataV2:
-         self.tcp_flags_interval = interval
- 
-     def on_tcp_remove_flow(self, interval, total_byte_count, total_packet_count):
--        if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
--            byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
-+        byte_count, packet_count = self.get_interval_values(total_byte_count, total_packet_count)
-+        byte_count = byte_count + self.additional_bytes
-+        packet_count = packet_count + self.additional_packets
- 
--            self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
--            self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
-+        if byte_count > 0:
-+            if interval == self.tcp_flags_interval and len(self.byte_count_list) > 0:
-+                self.byte_count_list[-1] = self.byte_count_list[-1] + self.additional_bytes + byte_count
-+                self.packet_count_list[-1] = self.packet_count_list[-1] + self.additional_packets + packet_count
-+            else:
-+                self.byte_count_list.append(byte_count)
-+                self.packet_count_list.append(packet_count)
- 
--            self.additional_bytes = 0
--            self.additional_packets = 0
--            self.previous_byte_count = total_byte_count
--            self.previous_packet_count = total_packet_count
--        else:
--            self.append_data(total_byte_count, total_packet_count)
-+        self.additional_bytes = 0
-+        self.additional_packets = 0
-+        self.previous_byte_count = total_byte_count
-+        self.previous_packet_count = total_packet_count
+@@ -403,7 +401,7 @@ class DataV2:
+         self.previous_packet_count = total_packet_count
  
      # public - called from removed
 -    def remove_udp_padding(self):
@@ -60,7 +32,7 @@ index fffa675..89734ee 100644
          # there is no way to byte_count = 0 and packet_count <> 0, we can check only byte_count
          while len(self.byte_count_list) > 0 and self.byte_count_list[-1] == 0:
              del self.byte_count_list[-1:]
-@@ -502,12 +504,11 @@ class DataV2:
+@@ -506,12 +504,11 @@ class DataV2:
  
  
  class FlowInfoV2:
@@ -75,7 +47,7 @@ index fffa675..89734ee 100644
          self.pair = None
          self.tcp_finished_flag = False
  
-@@ -609,8 +610,6 @@ class FlowInfoV2:
+@@ -613,8 +610,6 @@ class FlowInfoV2:
      def has_tcp_finished_flag(self):
          return self.tcp_finished_flag
  
@@ -84,7 +56,7 @@ index fffa675..89734ee 100644
      def update_counters(self, total_byte_count, total_packet_count):
          if self.status == STATUS_ACTIVE:
              self.data.append_data(total_byte_count, total_packet_count)
-@@ -624,12 +623,11 @@ class FlowInfoV2:
+@@ -628,12 +623,11 @@ class FlowInfoV2:
  
      def on_flow_removed(self, interval, byte_count, packet_count):
          self.deactivate_flow()
@@ -101,7 +73,7 @@ index fffa675..89734ee 100644
  
      def process_dns(self):
          self.data.append_data(0, 0)
-@@ -716,17 +714,16 @@ def insert_into_sorted_list(flow_list, flow):
+@@ -720,17 +714,16 @@ def insert_into_sorted_list(flow_list, flow):
  
  
  class FlowDataTableV2:
@@ -121,7 +93,7 @@ index fffa675..89734ee 100644
          if new_flow.is_dns_communication():
              self.dns_flows = insert_into_sorted_list(self.dns_flows, new_flow)
              new_flow.process_dns()
-@@ -750,8 +747,6 @@ class FlowDataTableV2:
+@@ -754,8 +747,6 @@ class FlowDataTableV2:
                  i = i + 1
              elif value > 0:
                  # finished flow, no input for it
@@ -130,7 +102,7 @@ index fffa675..89734ee 100644
                  j = j + 1
              else:
                  self.active_flows[j].update_counters(sorted_data[i]['byte_count'], sorted_data[i]['packet_count'])
-@@ -803,30 +798,26 @@ class FlowDataTableV2:
+@@ -807,30 +798,26 @@ class FlowDataTableV2:
      def on_flow_removed(self, removed_flow_data):
          index = self.find_active_flow(removed_flow_data)
          if index != -1:
@@ -165,7 +137,7 @@ index fffa675..89734ee 100644
              new_flow = self.on_add_flow(tcp_flow_data)
              new_flow.set_tcp_finished_flag()
          return exists
-@@ -835,8 +826,7 @@ class FlowDataTableV2:
+@@ -839,8 +826,7 @@ class FlowDataTableV2:
          # remove all flows marked as finished
          i = 0
          while i < len(self.finished_flows):
@@ -175,7 +147,7 @@ index fffa675..89734ee 100644
                  self.finished_flows.pop(i)
              else:
                  i = i + 1
-@@ -1004,7 +994,8 @@ class SwitchController(app_manager.RyuApp):
+@@ -1008,7 +994,8 @@ class SwitchController(app_manager.RyuApp):
          self.mac_to_port = {}
  
          self.CONF = cfg.CONF
@@ -185,7 +157,7 @@ index fffa675..89734ee 100644
                                   cfg.IntOpt('DELETE_INTERVAL', default=1, help='Delete Interval')])
          self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
          self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
-@@ -1013,12 +1004,13 @@ class SwitchController(app_manager.RyuApp):
+@@ -1017,12 +1004,13 @@ class SwitchController(app_manager.RyuApp):
              [cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
          self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
          self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
@@ -201,7 +173,7 @@ index fffa675..89734ee 100644
          self.save_counter = 0
          init_finished_flows_storage(self.CONF.COLLECT_INTERVAL, self.CONF.SAVE_INTERVAL, self.CONF.FINISHED_FLOWS_FILE)
          self.stats_thread = hub.spawn(self.run_stats_thread)
-@@ -1039,9 +1031,11 @@ class SwitchController(app_manager.RyuApp):
+@@ -1043,9 +1031,11 @@ class SwitchController(app_manager.RyuApp):
          add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
  
          # install tcp flags flow entry - we need packet with flags for tcp session end to remove flow from table
@@ -214,7 +186,7 @@ index fffa675..89734ee 100644
          add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
  
      def get_ethernet_ports(self, datapath, msg, eth):
-@@ -1073,9 +1067,9 @@ class SwitchController(app_manager.RyuApp):
+@@ -1077,9 +1067,9 @@ class SwitchController(app_manager.RyuApp):
          match1 = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                   ipv4_src=ip.src,
                                   ipv4_dst=ip.dst,
@@ -226,7 +198,7 @@ index fffa675..89734ee 100644
  
          if buffer_id == ofproto.OFP_NO_BUFFER:
              buffer_id = None
-@@ -1136,27 +1130,27 @@ class SwitchController(app_manager.RyuApp):
+@@ -1140,27 +1130,27 @@ class SwitchController(app_manager.RyuApp):
                      match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip.src, ipv4_dst=ip.dst,
                                              ip_proto=protocol)
                      priority = ICMP_PRIORITY_LEVEL
@@ -261,7 +233,7 @@ index fffa675..89734ee 100644
  
                  # verify if we have a valid buffer_id, if yes avoid to send both
                  # flow_mod & packet_out
-@@ -1227,13 +1221,12 @@ class SwitchController(app_manager.RyuApp):
+@@ -1231,13 +1221,12 @@ class SwitchController(app_manager.RyuApp):
          if flow_data is not None:
              flow_data['byte_count'] = ev.msg.stats['byte_count']
              flow_data['packet_count'] = ev.msg.stats['packet_count']
