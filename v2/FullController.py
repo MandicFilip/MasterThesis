@@ -29,8 +29,10 @@ from ryu.lib.packet import udp
 from ryu import cfg
 from ryu.lib import hub
 
+import requests
 import statistics
 import scipy.stats
+import json
 import shlex
 import subprocess
 from operator import itemgetter
@@ -49,7 +51,6 @@ STATUS_ACTIVE = 1
 STATUS_WAITING = 2
 STATUS_FINISHED = 3
 
-DNS_PORT = 53
 ETHERNET_HEADER_SIZE_IN_BYTES = 14
 
 
@@ -121,6 +122,11 @@ def process_line(line):
     return flow
 
 
+def sort_data(data):
+    data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
+    return data
+
+
 def process_flow_data(output):
     lines = output.split('\n')
     data = []
@@ -130,8 +136,6 @@ def process_flow_data(output):
 
         if flow_info['priority'] == TCP_UDP_PRIORITY_LEVEL:
             data.append(flow_info)
-
-    data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
 
     return data
 
@@ -821,7 +825,6 @@ class FlowDataTableV2:
         else:
             new_flow = self.on_add_flow(tcp_flow_data)
             new_flow.set_tcp_finished_flag()
-        return exists
 
     def clear_finished_flows(self):
         # remove all flows marked as finished
@@ -866,7 +869,7 @@ class FlowDataTableV2:
 # ----------------------------------------------------CONTROLLER--------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
 
-
+# CONTROLLER
 def extract_match_from_packet(pkt):
     eth = pkt.get_protocols(ethernet.ethernet)[0]
     if eth.ethertype != ether_types.ETH_TYPE_IP:
@@ -875,15 +878,14 @@ def extract_match_from_packet(pkt):
     ip = pkt.get_protocol(ipv4.ipv4)
     protocol = ip.proto
 
-    bytes_count = int(ip.total_length) + ETHERNET_HEADER_SIZE_IN_BYTES
     if protocol == in_proto.IPPROTO_TCP:
         tcp_p = pkt.get_protocol(tcp.tcp)
         return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_TCP, 'byte_count': bytes_count, 'packet_count': 1}
+                'protocol_code': in_proto.IPPROTO_TCP}
     elif protocol == in_proto.IPPROTO_UDP:
         udp_p = pkt.get_protocol(udp.udp)
         return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_UDP, 'byte_count': bytes_count, 'packet_count': 1}
+                'protocol_code': in_proto.IPPROTO_UDP}
     return None
 
 
@@ -966,6 +968,13 @@ def forward_packet(datapath, msg, in_port, actions):
     out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
                               match=match, actions=actions, data=data)
     datapath.send_msg(out)
+
+
+
+SERVER_URL = 'http://127.0.0.1:8080'
+NEW_FLOW_ENDPOINT = SERVER_URL + '/new_flow'
+TCP_FLAGS_ENDPOINT = SERVER_URL + '/tcp_flags'
+STATS_ENDPOINT = SERVER_URL + '/stats'
 
 
 class SwitchController(app_manager.RyuApp):
@@ -1151,6 +1160,7 @@ class SwitchController(app_manager.RyuApp):
                               ev.msg.msg_len, ev.msg.total_len)
         msg = ev.msg
         datapath = msg.datapath
+        ofp = datapath.ofproto
         parser = datapath.ofproto_parser
 
         pkt = packet.Packet(msg.data)
@@ -1163,8 +1173,9 @@ class SwitchController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(out_port)]
 
         if is_tcp_flags_packet(pkt, eth):
-            exists = self.save_tcp_flags_packet_info(msg, pkt)
-            if not exists:
+            self.save_tcp_flags_packet_info(msg, pkt)
+            if msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
+                print('Table miss for tcp flows')
                 self.install_flow(datapath, msg, pkt, eth, out_port, actions)
             self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
         else:
@@ -1185,6 +1196,9 @@ class SwitchController(app_manager.RyuApp):
     def _flow_stats_reply_handler(self, ev):
         try:
             data = get_statistics()
+            data = sort_data(data)
+            json_data = json.dumps(data)
+            requests.post(STATS_ENDPOINT, json=json_data)
             self.dataTable.on_update(data)
 
             self.save_counter = self.save_counter + 1
@@ -1198,19 +1212,22 @@ class SwitchController(app_manager.RyuApp):
 
     def save_tcp_flags_packet_info(self, msg, packet):
         data = extract_match_from_packet(packet)
+        json_data = json.dumps(data)
 
         # ipv6 not supported at the moment
         if data is not None:
             data['byte_count'] = msg.total_len
             data['packet_count'] = 1
-            return self.dataTable.on_tcp_flags_package(data)
-        return True     # ignore this case
+            requests.post(TCP_FLAGS_ENDPOINT, json=json_data)
+            self.dataTable.on_tcp_flags_package(data)
 
     def add_flow_to_stats_table(self, msg, packet):
         data = extract_match_from_packet(packet)
+        json_data = json.dumps(data)
 
         # ipv6 not supported at the moment
         if data is not None:
             data['byte_count'] = msg.total_len
             data['packet_count'] = 1
             self.dataTable.on_add_flow(data)
+            requests.post(NEW_FLOW_ENDPOINT, json=json_data)
