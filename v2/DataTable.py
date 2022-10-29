@@ -83,16 +83,21 @@ def init_finished_flows_storage(collect_interval, save_interval, finished_flows_
         print("Error opening file: " + finished_flows_file)
 
 
-def save_active_flows(file, flows):
+def save_active_flows(file, active_flows, finished_flows):
     if os.path.exists(file):
         os.remove(file)
     try:
         file = open(file, "w+")
-        for flow in flows:
+        for flow in active_flows:
             flow_string = format_flow_info(flow)
             file.write(flow_string)
             file.write("\n")
 
+        for flow in finished_flows:
+            if not flow.is_finished():
+                flow_string = format_flow_info(flow)
+                file.write(flow_string)
+                file.write("\n")
         file.close()
     except IOError:
         print("Error opening file: " + file)
@@ -708,7 +713,7 @@ class FlowDataTableV2:
     # public
     def on_save_flows(self, active_flows_file, finished_flows_file):
         self.calc_stats()
-        save_active_flows(active_flows_file, self.active_flows)
+        save_active_flows(active_flows_file, self.active_flows, self.finished_flows)
         save_finished_flows(finished_flows_file, self.finished_flows)
         self.clear_finished_flows()
 
