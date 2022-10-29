@@ -1,12 +1,15 @@
 class DummyTable:
     def initialize(self, tcp_idle_interval, udp_idle_interval):
-        pass
+        return
 
     def on_add_flow(self, info):
-        pass
+        return
 
     def on_update(self, data):
-        pass
+        return
 
     def on_tcp_flags_package(self, tcp_flow_data):
-        pass
+        return
+
+    def on_save_flows(self, active_flows_file, finished_flows_file):
+        return

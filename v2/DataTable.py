@@ -592,18 +592,11 @@ class FlowDataTableV2:
         self.remove_counter = 0
         self.tcp_idle_interval = 0
         self.udp_idle_interval = 0
-        self.save_interval = 0
-        self.save_counter = 0
-        self.active_flows_file = ''
-        self.finished_flows_file = ''
 
     # public
     def initialize(self, config):
         self.tcp_idle_interval = config['tcp_idle_interval']
         self.udp_idle_interval = config['udp_idle_interval']
-        self.save_interval = config['save_interval']
-        self.active_flows_file = config['active_flows_file']
-        self.finished_flows_file = config['finished_flows_file']
         print(config)
 
     # public
@@ -620,14 +613,8 @@ class FlowDataTableV2:
     # public
     def on_update(self, data):
         data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
-
         self.update_active_flows_table(data)
         self.update_flow_status()
-
-        self.save_counter = self.save_counter + 1
-        if self.save_counter == self.save_interval:
-            self.save_counter = 0
-            self.save_flows()
 
     def update_active_flows_table(self, sorted_data):
         i = 0
@@ -718,10 +705,11 @@ class FlowDataTableV2:
             else:
                 i = i + 1
 
-    def save_flows(self):
+    # public
+    def on_save_flows(self, active_flows_file, finished_flows_file):
         self.calc_stats()
-        save_active_flows(self.active_flows_file, self.active_flows)
-        save_finished_flows(self.finished_flows_file, self.finished_flows)
+        save_active_flows(active_flows_file, self.active_flows)
+        save_finished_flows(finished_flows_file, self.finished_flows)
         self.clear_finished_flows()
 
     def calc_stats(self):
