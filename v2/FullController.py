@@ -39,6 +39,7 @@ ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
 
+DNS_PORT = 53
 
 # ------------------------------------------------------DEBUG-----------------------------------------------------------
 
@@ -156,21 +157,6 @@ def extract_match_from_packet(pkt):
     return None
 
 
-def extract_match_data_from_removed_message(match):
-    match_map = {'protocol_code': match['ip_proto'], 'ip_src': match['ipv4_src'], 'ip_dst': match['ipv4_dst']}
-
-    if match['ip_proto'] == in_proto.IPPROTO_TCP:
-        match_map['port_src'] = match['tcp_src']
-        match_map['port_dst'] = match['tcp_dst']
-    elif match['ip_proto'] == in_proto.IPPROTO_UDP:
-        match_map['port_src'] = match['udp_src']
-        match_map['port_dst'] = match['udp_dst']
-    else:
-        return None
-
-    return match_map
-
-
 def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
     ofproto = datapath.ofproto
     parser = datapath.ofproto_parser
@@ -220,6 +206,11 @@ def is_tcp_flags_packet(pkt, eth):
         return True
 
     return False
+
+
+def is_dns_communication(data):
+    is_udp = data['protocol_code'] == in_proto.IPPROTO_UDP
+    return is_udp and (data['port_src'] == DNS_PORT or data['port_dst'] == DNS_PORT)
 
 
 def forward_packet(datapath, msg, in_port, actions):
@@ -428,6 +419,11 @@ class SwitchController(app_manager.RyuApp):
                     idle_timeout = self.CONF.TCP_IDLE_TIMEOUT
                 elif protocol == in_proto.IPPROTO_UDP:
                     udp_p = pkt.get_protocol(udp.udp)
+
+                    # TODO -> Debug
+                    if udp_p.src_port == DNS_PORT or udp_p.dst_port == DNS_PORT:
+                        print('DNS communication in table')
+
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
                                             ipv4_src=ip.src,
                                             ipv4_dst=ip.dst,
@@ -464,14 +460,18 @@ class SwitchController(app_manager.RyuApp):
         in_port, out_port = self.get_ethernet_ports(datapath, msg, eth)
         actions = [parser.OFPActionOutput(out_port)]
 
+        data = extract_match_from_packet(packet)
+
         if is_tcp_flags_packet(pkt, eth):
-            self.save_tcp_flags_packet_info(msg, pkt)
-            if msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
-                self.install_flow(datapath, msg, pkt, eth, out_port, actions)
-            self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
+            self.save_tcp_flags_packet_info(msg, data)
+            if not is_dns_communication(data):
+                if msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
+                    self.install_flow(datapath, msg, pkt, eth, out_port, actions)
+                self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
         else:
-            self.install_flow(datapath, msg, pkt, eth, out_port, actions)
-            self.add_flow_to_stats_table(msg, pkt)
+            self.add_flow_to_stats_table(msg, data)
+            if not is_dns_communication(data):
+                self.install_flow(datapath, msg, pkt, eth, out_port, actions)
 
         forward_packet(datapath, msg, in_port, actions)
 
@@ -493,19 +493,15 @@ class SwitchController(app_manager.RyuApp):
             self.logger.info("Error collecting data")
             self.logger.debug(err)
 
-    def save_tcp_flags_packet_info(self, msg, packet):
-        data = extract_match_from_packet(packet)
-
+    def save_tcp_flags_packet_info(self, msg, data):
         # ipv6 not supported at the moment
         if data is not None:
             data['byte_count'] = msg.total_len
             data['packet_count'] = 1
             self.controller_data_buffer.add_tcp_flags_data(data)
 
-    def add_flow_to_stats_table(self, msg, packet):
-        data = extract_match_from_packet(packet)
-
-        # ipv6 not supported at the moment
+    def add_flow_to_stats_table(self, msg, data):
+        # ipv6 not supported at the moment, do not pass ICMP
         if data is not None:
             data['byte_count'] = msg.total_len
             data['packet_count'] = 1
