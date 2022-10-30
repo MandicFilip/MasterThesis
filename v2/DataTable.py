@@ -14,6 +14,23 @@ STATUS_ACTIVE = 1
 STATUS_WAITING = 2
 STATUS_FINISHED = 3
 
+# ----------------------------------------------------------------------------------------------------------------------
+# ------------------------------------------------------DEBUG-----------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
+marked_flows = [
+    {'ip_src': '184.51.9.98', 'ip_dst': '192.168.0.25', 'port_src': 443, 'port_dst': 61185, 'protocol_code': 6},
+    {'ip_src': '192.168.0.15', 'ip_dst': '239.255.255.250', 'port_src': 60151, 'port_dst': 1900, 'protocol_code': 17},
+]
+
+
+def check_in_marked_flows(flow):
+    for marked in marked_flows:
+        if flow['ip_src'] == marked['ip_src'] and flow['ip_dst'] == marked['ip_dst'] and \
+                flow['port_src'] == marked['port_src'] and flow['port_dst'] == marked['port_dst']:
+            return True
+    return False
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------STORAGE---------------------------------------------------------
@@ -285,8 +302,8 @@ class DataV2:
         self.packet_median = statistics.median(self.packet_count_list)
 
     def calc_mode(self):
-        self.byte_mode = scipy.stats.mode(self.byte_count_list).mode[0]
-        self.packet_mode = scipy.stats.mode(self.packet_count_list).mode[0]
+        self.byte_mode = scipy.stats.mode(self.byte_count_list, keepdims=True).mode[0]
+        self.packet_mode = scipy.stats.mode(self.packet_count_list, keepdims=True).mode[0]
 
     def calc_standard_deviation(self):
         self.byte_standard_deviation = statistics.stdev(self.byte_count_list)
@@ -606,6 +623,8 @@ class FlowDataTableV2:
 
     # public
     def on_add_flow(self, info):
+        if check_in_marked_flows(info):
+            print('Add new flow -> Interval: ' + str(self.interval) + '   Flow: ' + str(info))
         self.add_counter = self.add_counter + 1
         new_flow = FlowInfoV2(self.interval, info, self.tcp_idle_interval, self.udp_idle_interval)
         if new_flow.is_dns_communication():
@@ -662,6 +681,8 @@ class FlowDataTableV2:
         while i < len(self.active_flows):
             flow = self.active_flows[i]
             flow.update_status()
+            if check_in_marked_flows(flow.match.get_entry()):
+                print('Interval: ' + str(self.interval) + '   Flow: ' + str(flow))
 
             if flow.is_active():
                 if not flow.has_pair():
@@ -696,8 +717,12 @@ class FlowDataTableV2:
         exists = index != -1
         if exists:
             flow = self.active_flows[index]
+            if check_in_marked_flows(tcp_flow_data):
+                print('TCP flags found -> Interval: ' + str(self.interval) + '   Flow: ' + str(flow))
             flow.add_last_tcp_package_data(self.interval, tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
         else:
+            if check_in_marked_flows(tcp_flow_data):
+                print('TCP flags not found -> Interval: ' + str(self.interval) + '   Flow: ' + str(tcp_flow_data))
             new_flow = self.on_add_flow(tcp_flow_data)
             new_flow.set_tcp_finished_flag()
 
@@ -712,11 +737,11 @@ class FlowDataTableV2:
 
     # public
     def on_save_flows(self, active_flows_file, finished_flows_file):
-        self.calc_stats()
         save_active_flows(active_flows_file, self.active_flows, self.finished_flows)
         save_finished_flows(finished_flows_file, self.finished_flows)
         self.clear_finished_flows()
 
+    # public
     def calc_stats(self):
         for flow in self.active_flows:
             flow.calc_stats()

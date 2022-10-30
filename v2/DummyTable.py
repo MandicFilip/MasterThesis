@@ -13,3 +13,6 @@ class DummyTable:
 
     def on_save_flows(self, active_flows_file, finished_flows_file):
         return
+
+    def calc_stats(self):
+        return
