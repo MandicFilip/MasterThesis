@@ -566,8 +566,6 @@ class SwitchController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(out_port)]
 
         data = self.packet_decoder.decode_packet(msg, pkt)
-        if data['ip_version'] == ether_types.ETH_TYPE_IPV6:
-            print('IP v6 flow -> ' + str(data))
         if data is not None:
             self.process_data(data, msg, actions)
 
