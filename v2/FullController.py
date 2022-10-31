@@ -45,34 +45,6 @@ NON_TCP_UDP_PACKET = -1
 DNS_PORT = 53
 
 
-# ------------------------------------------------------DEBUG-----------------------------------------------------------
-
-def match_to_string(match):
-    match_str = '{'
-    match_str = match_str + 'ip_src: ' + match['ip_src'] + ', '
-    match_str = match_str + 'ip_dst: ' + match['ip_dst'] + ', '
-    match_str = match_str + 'port_src: ' + str(match['port_src']) + ', '
-    match_str = match_str + 'port_dst: ' + str(match['port_dst']) + ', '
-    match_str = match_str + 'protocol_code: ' + str(match['protocol_code']) + '} '
-    return match_str
-
-
-marked_flows = [
-    {'ip_src': '184.51.9.98', 'ip_dst': '192.168.0.25', 'port_src': 443, 'port_dst': 61185, 'protocol_code': 6},
-    {'ip_src': '192.168.0.15', 'ip_dst': '239.255.255.250', 'port_src': 60151, 'port_dst': 1900, 'protocol_code': 17},
-]
-
-
-def check_in_marked_flows(flow):
-    if flow is None:
-        return False
-    for marked in marked_flows:
-        if flow['ip_src'] == marked['ip_src'] and flow['ip_dst'] == marked['ip_dst'] and \
-                flow['port_src'] == marked['port_src'] and flow['port_dst'] == marked['port_dst']:
-            return True
-    return False
-
-
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------INPUT-----------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
@@ -227,7 +199,6 @@ class PacketDecoder:
             data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
                     'protocol_code': in_proto.IPPROTO_UDP, 'collect': True}
         data['ip_version'] = ether_types.ETH_TYPE_IPV6
-        print(data)
         return data
 
     # public
@@ -522,7 +493,7 @@ class SwitchController(app_manager.RyuApp):
         # Give some time for peers to finish communication and then remove flow from table
         hub.spawn(delete_tcp_flow_pair, msg.datapath, match, actions, self.CONF.DELETE_INTERVAL, msg.buffer_id)
 
-    def install_flow(self, data, msg, actions, marked):
+    def install_flow(self, data, msg, actions):
         ofproto = msg.datapath.ofproto
         parser = msg.datapath.ofproto_parser
 
@@ -538,15 +509,14 @@ class SwitchController(app_manager.RyuApp):
             add_flow(msg.datapath, priority, match, actions, idle_timeout)
 
     def process_data(self, data, msg, actions):
-        marked = check_in_marked_flows(data)
         if is_tcp_flags_packet(data):
             if msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
-                self.install_flow(data, msg, actions, marked)
+                self.install_flow(data, msg, actions)
             self.schedule_flow_removal(msg, data, actions)
             self.save_tcp_flags_packet_to_table(data)
         else:
             if not is_dns_communication(data):
-                self.install_flow(data, msg, actions, marked)
+                self.install_flow(data, msg, actions)
             self.add_flow_to_stats_table(data)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
