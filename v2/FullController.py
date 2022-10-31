@@ -23,6 +23,7 @@ from ryu.lib.packet import ethernet
 from ryu.lib.packet import ether_types
 from ryu.lib.packet import in_proto
 from ryu.lib.packet import ipv4
+from ryu.lib.packet import ipv6
 from ryu.lib.packet import tcp
 from ryu.lib.packet import udp
 
@@ -39,7 +40,10 @@ ICMP_PRIORITY_LEVEL = 1
 TCP_UDP_PRIORITY_LEVEL = 2
 TCP_FLAGS_PRIORITY_LEVEL = 3
 
+NON_TCP_UDP_PACKET = -1
+
 DNS_PORT = 53
+
 
 # ------------------------------------------------------DEBUG-----------------------------------------------------------
 
@@ -67,6 +71,7 @@ def check_in_marked_flows(flow):
                 flow['port_src'] == marked['port_src'] and flow['port_dst'] == marked['port_dst']:
             return True
     return False
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 # ------------------------------------------------------INPUT-----------------------------------------------------------
@@ -125,7 +130,7 @@ def process_line(line):
     return flow
 
 
-def process_flow_data(output):
+def process_stats_data_input(output):
     lines = output.split('\n')
     data = []
 
@@ -145,102 +150,11 @@ def get_statistics():
     args = shlex.split(GET_STATISTICS_COMMAND)
     output = subprocess.check_output(args, stderr=subprocess.STDOUT)
 
-    return process_flow_data(output)
-
+    return process_stats_data_input(output)
 
 # ----------------------------------------------------------------------------------------------------------------------
-# ----------------------------------------------------CONTROLLER--------------------------------------------------------
+# ----------------------------------------------------DATA BUFFER-------------------------------------------------------
 # ----------------------------------------------------------------------------------------------------------------------
-
-# CONTROLLER
-def extract_match_from_packet(pkt):
-    eth = pkt.get_protocols(ethernet.ethernet)[0]
-    if eth.ethertype != ether_types.ETH_TYPE_IP:
-        return None
-
-    ip = pkt.get_protocol(ipv4.ipv4)
-    protocol = ip.proto
-
-    if protocol == in_proto.IPPROTO_TCP:
-        tcp_p = pkt.get_protocol(tcp.tcp)
-        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_TCP}
-    elif protocol == in_proto.IPPROTO_UDP:
-        udp_p = pkt.get_protocol(udp.udp)
-        return {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
-                'protocol_code': in_proto.IPPROTO_UDP}
-    return None
-
-
-def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
-    ofproto = datapath.ofproto
-    parser = datapath.ofproto_parser
-
-    inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-    cookie = 0
-    cookie_mask = 0
-    table_id = 0
-    hard_timeout = 0
-    importance = 0
-
-    if not buffer_id:
-        buffer_id = ofproto.OFP_NO_BUFFER
-
-    mod = parser.OFPFlowMod(datapath,
-                            cookie,
-                            cookie_mask,
-                            table_id,
-                            ofproto.OFPFC_ADD,
-                            idle_timeout,
-                            hard_timeout,
-                            priority,
-                            buffer_id,
-                            ofproto.OFPP_ANY,
-                            ofproto.OFPG_ANY,
-                            0,
-                            importance,
-                            match,
-                            inst)
-    datapath.send_msg(mod)
-
-
-def is_tcp_flags_packet(pkt, eth):
-    if eth.ethertype != ether_types.ETH_TYPE_IP:
-        return False
-
-    ip = pkt.get_protocol(ipv4.ipv4)
-    protocol = ip.proto
-
-    if protocol != in_proto.IPPROTO_TCP:
-        return False
-
-    tcp_p = pkt.get_protocol(tcp.tcp)
-    tcp_flags = tcp_p.bits
-
-    if tcp_flags & tcp.TCP_FIN or tcp_flags & tcp.TCP_RST:
-        return True
-
-    return False
-
-
-def is_dns_communication(data):
-    is_udp = data['protocol_code'] == in_proto.IPPROTO_UDP
-    return is_udp and (data['port_src'] == DNS_PORT or data['port_dst'] == DNS_PORT)
-
-
-def forward_packet(datapath, msg, in_port, actions):
-    ofproto = datapath.ofproto
-    parser = datapath.ofproto_parser
-
-    data = None
-    if msg.buffer_id == ofproto.OFP_NO_BUFFER:
-        data = msg.data
-
-    match = parser.OFPMatch(in_port=in_port)
-
-    out = parser.OFPPacketOut(datapath=datapath, buffer_id=msg.buffer_id,
-                              match=match, actions=actions, data=data)
-    datapath.send_msg(out)
 
 
 SERVER_URL = 'http://127.0.0.1:8080'
@@ -275,6 +189,250 @@ class ControllerDataBuffer:
         del self.data[:]
 
 
+# ----------------------------------------------------------------------------------------------------------------------
+# ----------------------------------------------------CONTROLLER--------------------------------------------------------
+# ----------------------------------------------------------------------------------------------------------------------
+
+class PacketDecoder:
+    @staticmethod
+    def extract_data_from_IPv4packet(pkt):
+        ip = pkt.get_protocol(ipv4.ipv4)
+        protocol = ip.proto
+
+        data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'protocol_code': NON_TCP_UDP_PACKET, 'collect': False}
+        if protocol == in_proto.IPPROTO_TCP:
+            tcp_p = pkt.get_protocol(tcp.tcp)
+            data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
+                    'protocol_code': in_proto.IPPROTO_TCP, 'collect': True, 'tcp_flags': tcp_p.bits}
+        elif protocol == in_proto.IPPROTO_UDP:
+            udp_p = pkt.get_protocol(udp.udp)
+            data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
+                    'protocol_code': in_proto.IPPROTO_UDP, 'collect': True}
+
+        data['ip_version'] = ether_types.ETH_TYPE_IP
+        return data
+
+    @staticmethod
+    def extract_data_from_IPv6packet(pkt):
+        ip = pkt.get_protocol(ipv6.ipv6)
+        protocol = ip.nxt
+
+        data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'protocol_code': NON_TCP_UDP_PACKET, 'collect': False}
+        if protocol == in_proto.IPPROTO_TCP:
+            tcp_p = pkt.get_protocol(tcp.tcp)
+            data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
+                    'protocol_code': in_proto.IPPROTO_TCP, 'collect': True, 'tcp_flags': tcp_p.bits}
+        elif protocol == in_proto.IPPROTO_UDP:
+            udp_p = pkt.get_protocol(udp.udp)
+            data = {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port,
+                    'protocol_code': in_proto.IPPROTO_UDP, 'collect': True}
+        data['ip_version'] = ether_types.ETH_TYPE_IPV6
+        print(data)
+        return data
+
+    # public
+    def decode_packet(self, msg, pkt):
+        data = None
+        eth = pkt.get_protocols(ethernet.ethernet)[0]
+        if eth.ethertype == ether_types.ETH_TYPE_IP:
+            data = self.extract_data_from_IPv4packet(pkt)
+        elif eth.ethertype == ether_types.ETH_TYPE_IPV6:
+            data = self.extract_data_from_IPv6packet(pkt)
+
+        if data is not None:
+            data['byte_count'] = msg.total_len
+            data['packet_count'] = 1
+
+        return data
+
+
+def get_transmit_data(data):
+    return {'ip_src': data['ip_src'], 'ip_dst': data['ip_dst'], 'port_src': data['port_src'],
+            'port_dst': data['port_dst'], 'protocol_code': data['protocol_code'],
+            'byte_count': data['byte_count'], 'packet_count': data['packet_count']}
+
+
+class MatchBuilder:
+    @staticmethod
+    def build_tcp_ipv4_match(parser, tcp_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                               ipv4_src=tcp_data['ip_src'],
+                               ipv4_dst=tcp_data['ip_dst'],
+                               ip_proto=tcp_data['protocol_code'],
+                               tcp_src=tcp_data['port_src'],
+                               tcp_dst=tcp_data['port_dst'])
+
+    @staticmethod
+    def build_udp_ipv4_match(parser, udp_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                               ipv4_src=udp_data['ip_src'],
+                               ipv4_dst=udp_data['ip_dst'],
+                               ip_proto=udp_data['protocol_code'],
+                               udp_src=udp_data['port_src'],
+                               udp_dst=udp_data['port_dst'])
+
+    @staticmethod
+    def build_other_ipv4_match(parser, ip_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
+                               ipv4_src=ip_data['ip_src'],
+                               ipv4_dst=ip_data['ip_dst'],
+                               ip_proto=ip_data['protocol_code'])
+
+    @staticmethod
+    def build_tcp_ipv6_match(parser, tcp_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6,
+                               ipv6_src=tcp_data['ip_src'],
+                               ipv6_dst=tcp_data['ip_dst'],
+                               ip_proto=tcp_data['protocol_code'],
+                               tcp_src=tcp_data['port_src'],
+                               tcp_dst=tcp_data['port_dst'])
+
+    @staticmethod
+    def build_udp_ipv6_match(parser, udp_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6,
+                               ipv6_src=udp_data['ip_src'],
+                               ipv6_dst=udp_data['ip_dst'],
+                               ip_proto=udp_data['protocol_code'],
+                               udp_src=udp_data['port_src'],
+                               udp_dst=udp_data['port_dst'])
+
+    @staticmethod
+    def build_other_ipv6_match(parser, ip_data):
+        return parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6,
+                               ipv6_src=ip_data['ip_src'],
+                               ipv6_dst=ip_data['ip_dst'],
+                               ip_proto=ip_data['protocol_code'])
+
+    # public
+    def build_opf_match(self, parser, data):
+        if data['ip_version'] == ether_types.ETH_TYPE_IP:
+            if data['protocol_code'] == in_proto.IPPROTO_TCP:
+                return self.build_tcp_ipv4_match(parser, data)
+            elif data['protocol_code'] == in_proto.IPPROTO_UDP:
+                return self.build_udp_ipv4_match(parser, data)
+            else:
+                return self.build_other_ipv4_match(parser, data)
+        else:
+            if data['protocol_code'] == in_proto.IPPROTO_TCP:
+                return self.build_tcp_ipv6_match(parser, data)
+            elif data['protocol_code'] == in_proto.IPPROTO_UDP:
+                return self.build_udp_ipv6_match(parser, data)
+            else:
+                return self.build_other_ipv6_match(parser, data)
+
+
+class TimeoutManager:
+    def __init__(self, tcp_timeout, udp_timeout):
+        self.tcp_timeout = tcp_timeout
+        self.udp_timeout = udp_timeout
+
+    def get_timeout(self, data):
+        timeout = self.udp_timeout
+        if data['protocol_code'] == in_proto.IPPROTO_TCP:
+            timeout = self.tcp_timeout
+        return timeout
+
+
+def get_priority(data):
+    priority = ICMP_PRIORITY_LEVEL
+    if data['protocol_code'] == in_proto.IPPROTO_TCP or data['protocol_code'] == in_proto.IPPROTO_UDP:
+        priority = TCP_UDP_PRIORITY_LEVEL
+    return priority
+
+
+def is_tcp_flags_packet(data):
+    if data['protocol_code'] != in_proto.IPPROTO_TCP:
+        return False
+
+    is_finished_flag = (data['tcp_flags'] & tcp.TCP_FIN) != 0
+    is_reset_flag = (data['tcp_flags'] & tcp.TCP_RST) != 0
+    return is_finished_flag or is_reset_flag
+
+
+def is_dns_communication(data):
+    is_udp = data['protocol_code'] == in_proto.IPPROTO_UDP
+    return is_udp and (data['port_src'] == DNS_PORT or data['port_dst'] == DNS_PORT)
+
+
+def add_flow(datapath, priority, match, actions, idle_timeout=0, buffer_id=None):
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+
+    inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+    cookie = 0
+    cookie_mask = 0
+    table_id = 0
+    hard_timeout = 0
+    importance = 0
+
+    if not buffer_id:
+        buffer_id = ofproto.OFP_NO_BUFFER
+
+    mod = parser.OFPFlowMod(datapath,
+                            cookie,
+                            cookie_mask,
+                            table_id,
+                            ofproto.OFPFC_ADD,
+                            idle_timeout,
+                            hard_timeout,
+                            priority,
+                            buffer_id,
+                            ofproto.OFPP_ANY,
+                            ofproto.OFPG_ANY,
+                            0,
+                            importance,
+                            match,
+                            inst)
+    datapath.send_msg(mod)
+
+
+def delete_tcp_flow_pair(datapath, match, actions, sleep, buffer_id):
+    # wait for session to be closed
+    hub.sleep(sleep)
+
+    ofproto = datapath.ofproto
+    parser = datapath.ofproto_parser
+
+    cookie = cookie_mask = 0
+    table_id = 0
+    hard_timeout = idle_timeout = 0
+    priority = TCP_UDP_PRIORITY_LEVEL
+    importance = 0
+    inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+
+    mod = parser.OFPFlowMod(datapath,
+                            cookie,
+                            cookie_mask,
+                            table_id,
+                            ofproto.OFPFC_DELETE,
+                            idle_timeout,
+                            hard_timeout,
+                            priority,
+                            buffer_id,
+                            ofproto.OFPP_ANY,
+                            ofproto.OFPG_ANY,
+                            0,
+                            importance,
+                            match,
+                            inst)
+    datapath.send_msg(mod)
+
+
+def forward_packet(msg, in_port, actions):
+    ofproto = msg.datapath.ofproto
+    parser = msg.datapath.ofproto_parser
+
+    data = None
+    if msg.buffer_id == ofproto.OFP_NO_BUFFER:
+        data = msg.data
+
+    match = parser.OFPMatch(in_port=in_port)
+
+    out = parser.OFPPacketOut(datapath=msg.datapath, buffer_id=msg.buffer_id,
+                              match=match, actions=actions, data=data)
+    msg.datapath.send_msg(out)
+
+
 class SwitchController(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_5.OFP_VERSION]
 
@@ -301,6 +459,9 @@ class SwitchController(app_manager.RyuApp):
         self.logger.info("Finished flows file: " + self.CONF.FINISHED_FLOWS_FILE)
         self.stats_thread = hub.spawn(self.run_stats_thread)
         self.controller_data_buffer = ControllerDataBuffer()
+        self.packet_decoder = PacketDecoder()
+        self.match_builder = MatchBuilder()
+        self.timeout_manager = TimeoutManager(self.CONF.TCP_IDLE_TIMEOUT, self.CONF.UDP_IDLE_TIMEOUT)
 
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
@@ -313,15 +474,19 @@ class SwitchController(app_manager.RyuApp):
 
         # install table-miss flow entry
         match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
         add_flow(datapath, TABLE_MISS_PRIORITY_LEVEL, match, actions)
 
         # install tcp flags flow entry - we need packet with flags for tcp session end to remove flow from table
         match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ip_proto=in_proto.IPPROTO_TCP,
                                 tcp_flags=(tcp.TCP_FIN | tcp.TCP_RST))
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
+        add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
+
+        # maybe not needed
+        match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IPV6, ip_proto=in_proto.IPPROTO_TCP,
+                                tcp_flags=(tcp.TCP_FIN | tcp.TCP_RST))
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
         add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
 
         data = {'collect_interval': self.CONF.COLLECT_INTERVAL, 'save_interval': self.CONF.SAVE_INTERVAL,
@@ -348,118 +513,41 @@ class SwitchController(app_manager.RyuApp):
 
         return in_port, out_port
 
-    def process_tcp_flags_packet(self, datapath, pkt, actions, buffer_id):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+    # -----------------------------ABOVE: fixed for IPv6----------------------------------------------------------------
+    def schedule_flow_removal(self, msg, data, actions):
+        parser = msg.datapath.ofproto_parser
 
-        ip = pkt.get_protocol(ipv4.ipv4)
-        protocol = ip.proto  # should be 6 - TCP code
-        tcp_p = pkt.get_protocol(tcp.tcp)
-        match1 = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
-                                 ipv4_src=ip.src,
-                                 ipv4_dst=ip.dst,
-                                 ip_proto=protocol,
-                                 tcp_src=tcp_p.src_port,
-                                 tcp_dst=tcp_p.dst_port)
-
-        if buffer_id == ofproto.OFP_NO_BUFFER:
-            buffer_id = None
+        match = self.match_builder.build_opf_match(parser, data)
 
         # Give some time for peers to finish communication and then remove flow from table
-        hub.spawn(self.delete_tcp_flow_pair, datapath, match1, actions, buffer_id)
+        hub.spawn(delete_tcp_flow_pair, msg.datapath, match, actions, self.CONF.DELETE_INTERVAL, msg.buffer_id)
 
-    def delete_tcp_flow_pair(self, datapath, match1, actions, buffer_id=None):
-        # wait for session to be closed
-        hub.sleep(self.CONF.DELETE_INTERVAL)
+    def install_flow(self, data, msg, actions, marked):
+        ofproto = msg.datapath.ofproto
+        parser = msg.datapath.ofproto_parser
 
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        match = self.match_builder.build_opf_match(parser, data)
+        priority = get_priority(data)
+        idle_timeout = self.timeout_manager.get_timeout(data)
 
-        cookie = cookie_mask = 0
-        table_id = 0
-        hard_timeout = idle_timeout = 0
-        priority = TCP_UDP_PRIORITY_LEVEL
-        importance = 0
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
-        if not buffer_id:
-            buffer_id = ofproto.OFP_NO_BUFFER
+        # verify if we have a valid buffer_id, if yes avoid to send both
+        # flow_mod & packet_out
+        if msg.buffer_id != ofproto.OFP_NO_BUFFER:
+            add_flow(msg.datapath, priority, match, actions, idle_timeout, msg.buffer_id)
+        else:
+            add_flow(msg.datapath, priority, match, actions, idle_timeout)
 
-        mod = parser.OFPFlowMod(datapath,
-                                cookie,
-                                cookie_mask,
-                                table_id,
-                                ofproto.OFPFC_DELETE,
-                                idle_timeout,
-                                hard_timeout,
-                                priority,
-                                buffer_id,
-                                ofproto.OFPP_ANY,
-                                ofproto.OFPG_ANY,
-                                0,
-                                importance,
-                                match1,
-                                inst)
-        datapath.send_msg(mod)
-
-    def install_flow(self, datapath, msg, pkt, eth, actions, marked):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
-
-        if marked:
-            print('Started install flow')
-
-        # check if it is IP
-        if eth.ethertype == ether_types.ETH_TYPE_IP:
-            ip = pkt.get_protocol(ipv4.ipv4)
-            protocol = ip.proto
-
-            match = parser.OFPMatch()
-            idle_timeout = 0
-            priority = 0
-
-            if marked:
-                print('It is ethernet')
-
-            # Match if not TCP or UDP (for example ICMP protocol)
-            if (protocol != in_proto.IPPROTO_TCP) and (protocol != in_proto.IPPROTO_UDP):
-                match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, ipv4_src=ip.src, ipv4_dst=ip.dst,
-                                        ip_proto=protocol)
-                priority = ICMP_PRIORITY_LEVEL
-                idle_timeout = self.CONF.UDP_IDLE_TIMEOUT
-            elif protocol == in_proto.IPPROTO_TCP:
-                tcp_p = pkt.get_protocol(tcp.tcp)
-                if marked:
-                    print('Install tcp flow: ' + str(
-                        {'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': tcp_p.src_port, 'port_dst': tcp_p.dst_port,
-                         'protocol_code': 6}))
-
-                match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
-                                        ipv4_src=ip.src,
-                                        ipv4_dst=ip.dst,
-                                        ip_proto=protocol,
-                                        tcp_src=tcp_p.src_port,
-                                        tcp_dst=tcp_p.dst_port)
-                priority = TCP_UDP_PRIORITY_LEVEL
-                idle_timeout = self.CONF.TCP_IDLE_TIMEOUT
-            elif protocol == in_proto.IPPROTO_UDP:
-                udp_p = pkt.get_protocol(udp.udp)
-                if marked:
-                    print('Install udp flow: ' + str({'ip_src': ip.src, 'ip_dst': ip.dst, 'port_src': udp_p.src_port, 'port_dst': udp_p.dst_port, 'protocol_code': 17}))
-                match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP,
-                                        ipv4_src=ip.src,
-                                        ipv4_dst=ip.dst,
-                                        ip_proto=protocol,
-                                        udp_src=udp_p.src_port,
-                                        udp_dst=udp_p.dst_port)
-                priority = TCP_UDP_PRIORITY_LEVEL
-                idle_timeout = self.CONF.UDP_IDLE_TIMEOUT
-
-            # verify if we have a valid buffer_id, if yes avoid to send both
-            # flow_mod & packet_out
-            if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                add_flow(datapath, priority, match, actions, idle_timeout, msg.buffer_id)
-            else:
-                add_flow(datapath, priority, match, actions, idle_timeout)
+    def process_data(self, data, msg, actions):
+        marked = check_in_marked_flows(data)
+        if is_tcp_flags_packet(data):
+            if msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
+                self.install_flow(data, msg, actions, marked)
+            self.schedule_flow_removal(msg, data, actions)
+            self.save_tcp_flags_packet_to_table(data)
+        else:
+            if not is_dns_communication(data):
+                self.install_flow(data, msg, actions, marked)
+            self.add_flow_to_stats_table(data)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def _packet_in_handler(self, ev):
@@ -474,34 +562,16 @@ class SwitchController(app_manager.RyuApp):
 
         pkt = packet.Packet(msg.data)
         eth = pkt.get_protocols(ethernet.ethernet)[0]
-        if eth.ethertype == ether_types.ETH_TYPE_LLDP:
-            # ignore lldp packet
-            return
-
         in_port, out_port = self.get_ethernet_ports(datapath, msg, eth)
         actions = [parser.OFPActionOutput(out_port)]
 
-        data = extract_match_from_packet(pkt)
-        marked = check_in_marked_flows(data)
-        if marked:
-            print('Marked flow coming -> ' + str(data))
+        data = self.packet_decoder.decode_packet(msg, pkt)
+        if data['ip_version'] == ether_types.ETH_TYPE_IPV6:
+            print('IP v6 flow -> ' + str(data))
+        if data is not None:
+            self.process_data(data, msg, actions)
 
-        if is_tcp_flags_packet(pkt, eth):
-            print('Not table miss val: ' + str(msg.reason == ofproto_v1_5.OFPR_TABLE_MISS))
-            if data is not None and not is_dns_communication(data) and msg.reason == ofproto_v1_5.OFPR_TABLE_MISS:
-                self.install_flow(datapath, msg, pkt, eth, actions, marked)
-            self.process_tcp_flags_packet(datapath, pkt, actions, msg.buffer_id)
-            self.save_tcp_flags_packet_to_table(msg, data)
-        else:
-            if marked:
-                print('Not tcp flags')
-            if data is not None and not is_dns_communication(data):
-                if marked:
-                    print('Calling install flow')
-                self.install_flow(datapath, msg, pkt, eth, actions, marked)
-            self.add_flow_to_stats_table(msg, data)
-
-        forward_packet(datapath, msg, in_port, actions)
+        forward_packet(msg, in_port, actions)
 
     def run_stats_thread(self):
         while True:
@@ -521,16 +591,11 @@ class SwitchController(app_manager.RyuApp):
             self.logger.info("Error collecting data")
             self.logger.debug(err)
 
-    def save_tcp_flags_packet_to_table(self, msg, data):
-        # ipv6 not supported at the moment
-        if data is not None:
-            data['byte_count'] = msg.total_len
-            data['packet_count'] = 1
-            self.controller_data_buffer.add_tcp_flags_data(data)
+    def save_tcp_flags_packet_to_table(self, data):
+        transmit_data = get_transmit_data(data)
+        self.controller_data_buffer.add_tcp_flags_data(transmit_data)
 
-    def add_flow_to_stats_table(self, msg, data):
-        # ipv6 not supported at the moment, do not pass ICMP
-        if data is not None:
-            data['byte_count'] = msg.total_len
-            data['packet_count'] = 1
-            self.controller_data_buffer.add_new_flow_data(data)
+    def add_flow_to_stats_table(self, data):
+        if data['collect']:
+            transmit_data = get_transmit_data(data)
+            self.controller_data_buffer.add_new_flow_data(transmit_data)
