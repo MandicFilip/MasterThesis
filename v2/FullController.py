@@ -61,7 +61,11 @@ def process_assignment(assignment, flow):
         flow['byte_count'] = int(map_pair[1])
     if map_pair[0] == 'nw_src':
         flow['ip_src'] = map_pair[1]
+    if map_pair[0] == 'ipv6_src':
+        flow['ip_src'] = map_pair[1]
     if map_pair[0] == 'nw_dst':
+        flow['ip_dst'] = map_pair[1]
+    if map_pair[0] == 'ipv6_dst':
         flow['ip_dst'] = map_pair[1]
     if map_pair[0] == 'tp_src':
         flow['port_src'] = int(map_pair[1])
@@ -77,6 +81,10 @@ def process_part(part, flow):
     elif part == 'tcp':
         flow['protocol_code'] = in_proto.IPPROTO_TCP
     elif part == 'udp':
+        flow['protocol_code'] = in_proto.IPPROTO_UDP
+    elif part == 'tcp6':
+        flow['protocol_code'] = in_proto.IPPROTO_TCP
+    elif part == 'udp6':
         flow['protocol_code'] = in_proto.IPPROTO_UDP
 
     return flow
@@ -107,10 +115,14 @@ def process_stats_data_input(output):
     data = []
 
     for line in lines:
-        flow_info = process_line(line)
+        flow = process_line(line)
 
-        if flow_info['priority'] == TCP_UDP_PRIORITY_LEVEL:
-            data.append(flow_info)
+        if flow['priority'] == TCP_UDP_PRIORITY_LEVEL:
+            if 'ip_src' in flow and 'ip_dst' in flow and 'port_src' in flow and 'port_dst' in flow and 'protocol_code' in flow and 'byte_count' in flow and 'packet_count' in flow:
+                data.append(flow)
+            else:
+                print('Bad flow -> ' + str(flow))
+                print('\nFull line: ' + line + '\n\n')
 
     return data
 
