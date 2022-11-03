@@ -550,6 +550,9 @@ class SwitchController(app_manager.RyuApp):
         data = self.packet_decoder.decode_packet(msg, pkt)
         if data is not None:
             self.process_data(data, msg, actions)
+        else:
+            print(pkt)
+            print('\n')
 
         forward_packet(msg, in_port, actions)
 
