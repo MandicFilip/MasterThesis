@@ -16,3 +16,6 @@ class DummyTable:
 
     def calc_stats(self):
         return
+
+    def get_interval(self):
+        return 0

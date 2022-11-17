@@ -142,11 +142,13 @@ def get_statistics():
 
 
 SERVER_URL = 'http://127.0.0.1:8080'
-UPDATE_ENDPOINT = SERVER_URL + '/update'
-INITIALIZE_SERVER_ENDPOINT = SERVER_URL + '/initialize'
+SERVER_ENDPOINT = SERVER_URL + '/flows'
 
 NEW_FLOW_TYPE = 'NEW_FLOW'
 TCP_FLAGS_TYPE = 'TCP_FLAGS'
+
+INITIALIZE_SERVER_MESSAGE_TYPE = 'INITIALIZE_SERVER'
+UPDATE_MESSAGE_TYPE = 'UPDATE'
 
 
 class ControllerDataBuffer:
@@ -155,8 +157,9 @@ class ControllerDataBuffer:
 
     def add_initialize_data(self, data):
         del self.data[:]
+        data['message_type'] = INITIALIZE_SERVER_MESSAGE_TYPE
         json_data = json.dumps(data)
-        requests.post(INITIALIZE_SERVER_ENDPOINT, json=json_data)
+        requests.post(SERVER_ENDPOINT, json=json_data)
 
     def add_new_flow_data(self, data):
         data['type'] = NEW_FLOW_TYPE
@@ -167,9 +170,9 @@ class ControllerDataBuffer:
         self.data.append(data)
 
     def add_stats(self, stats):
-        pack = {'update': self.data, 'stats': stats}
+        pack = {'update': self.data, 'stats': stats, 'message_type': UPDATE_MESSAGE_TYPE}
         json_pack = json.dumps(pack)
-        requests.post(UPDATE_ENDPOINT, json=json_pack)
+        requests.post(SERVER_ENDPOINT, json=json_pack)
         del self.data[:]
 
 
@@ -472,9 +475,13 @@ class SwitchController(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER, ofproto.OFPCML_NO_BUFFER)]
         add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
 
-        data = {'collect_interval': self.CONF.COLLECT_INTERVAL, 'save_interval': self.CONF.SAVE_INTERVAL,
-                'tcp_idle_interval': self.CONF.TCP_IDLE_TIMEOUT, 'udp_idle_interval': self.CONF.UDP_IDLE_TIMEOUT,
-                'active_flows_file': self.CONF.ACTIVE_FLOWS_FILE, 'finished_flows_file': self.CONF.FINISHED_FLOWS_FILE}
+        data = {'collect_interval': self.CONF.COLLECT_INTERVAL,
+                'save_interval': self.CONF.SAVE_INTERVAL,
+                'tcp_idle_interval': self.CONF.TCP_IDLE_TIMEOUT,
+                'udp_idle_interval': self.CONF.UDP_IDLE_TIMEOUT,
+                'active_flows_file': self.CONF.ACTIVE_FLOWS_FILE,
+                'finished_flows_file': self.CONF.FINISHED_FLOWS_FILE
+                }
         self.controller_data_buffer.add_initialize_data(data)
 
     def get_ethernet_ports(self, datapath, msg, eth):

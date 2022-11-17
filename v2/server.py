@@ -2,20 +2,13 @@ import socketserver
 from http import server
 import simplejson
 import json
-from Manager import Manager
+
+from DataBuffer import DataBuffer
+
+SERVER_ENDPOINT = '/flows'
 
 
-def on_init(data_manager, config):
-    print('Init')
-    data_manager.initialize(config)
-
-
-def on_stats(data_manager, data):
-    print('Stats')
-    data_manager.on_update(data)
-
-
-manager = Manager()
+dataBuffer = DataBuffer()
 
 
 class DataServer(server.BaseHTTPRequestHandler):
@@ -28,18 +21,15 @@ class DataServer(server.BaseHTTPRequestHandler):
         return
 
     def do_POST(self):
-        global manager
+        global dataBuffer
 
         self._set_response()
         content_length = int(self.headers['Content-Length'])  # Get the size of data
         post_data = self.rfile.read(content_length)  # Get the data as a string
         data = json.loads(simplejson.loads(post_data))
 
-        if self.path == '/update':
-            on_stats(manager, data)
-
-        if self.path == '/initialize':
-            on_init(manager, data)
+        if self.path == SERVER_ENDPOINT:
+            dataBuffer.put(data)
 
 
 httpServer = socketserver.TCPServer(("", 8080), DataServer)

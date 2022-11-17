@@ -490,11 +490,12 @@ class FlowInfo:
             if self.get_data_lists_length() < MIN_LENGTH:
                 self.data.reset_stats()
 
-    def get_file_output_string(self, current_interval, include_arrays=False):
+    def get_file_output_string(self, current_interval, include_advanced_stats, include_arrays):
         flow_string = ""
         flow_string = flow_string + self.match.get_file_output_string()
         flow_string = flow_string + self.data.get_file_output_string_for_basic_stats(self.start_interval, current_interval)
-        flow_string = flow_string + self.data.get_file_output_string_for_advanced_stats()
+        if include_advanced_stats:
+            flow_string = flow_string + self.data.get_file_output_string_for_advanced_stats()
         if include_arrays:
             flow_string = flow_string + self.data.get_file_output_string_for_arrays()
         return flow_string

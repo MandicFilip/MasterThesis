@@ -186,11 +186,9 @@ class FlowDataTableV2:
 
     # public
     def calc_stats(self):
-        for flow in self.active_flows:
-            flow.calc_stats()
-
         for flow in self.finished_flows:
-            flow.calc_stats()
+            if flow.is_finished():
+                flow.calc_stats()
 
     def find_active_flow(self, key):
         return find_flow(self.active_flows, key)
@@ -214,13 +212,13 @@ class FlowDataTableV2:
         try:
             file = open(file, "w+")
             for flow in self.active_flows:
-                flow_string = flow.get_file_output_string(self.interval, True)
+                flow_string = flow.get_file_output_string(self.interval, False, True)
                 file.write(flow_string)
                 file.write("\n")
 
             for flow in self.finished_flows:
                 if not flow.is_finished():
-                    flow_string = flow.get_file_output_string(self.interval, True)
+                    flow_string = flow.get_file_output_string(self.interval, False, True)
                     file.write(flow_string)
                     file.write("\n")
             file.close()
@@ -235,10 +233,13 @@ class FlowDataTableV2:
             file = open(file, "a")
             for flow in self.finished_flows:
                 if flow.is_finished():
-                    flow_string = flow.get_file_output_string(self.interval, True)
+                    flow_string = flow.get_file_output_string(self.interval, True, False)
                     file.write(flow_string)
                     file.write("\n")
 
             file.close()
         except IOError:
             print("Error saving finished flows")
+
+    def get_interval(self):
+        return self.interval
