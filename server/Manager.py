@@ -87,7 +87,7 @@ class Manager:
         total_time = end_time - start_time
         update_flows_time = update_flows_end - start_time
         update_stats_time = update_stats_end - update_flows_end
-        queue_time = pack['put_time'] - pack['get_time']
+        queue_time = pack['get_time'] - pack['put_time']
         queue_size = pack['queue_size']
 
         report = f'Interval: {str(self.dataTable.get_interval())}'

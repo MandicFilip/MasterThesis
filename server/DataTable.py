@@ -71,6 +71,20 @@ class FlowDataTableV2:
         self.tcp_idle_interval = config['tcp_idle_interval']
         self.udp_idle_interval = config['udp_idle_interval']
 
+    def on_insert_values(self, update_flows):
+        active = []
+
+        for flow in update_list:
+            if flow['type'] is None:
+                continue
+
+            if flow['type'] == NEW_FLOW_TYPE:
+                self.dataTable.on_add_flow(flow)
+
+            else:
+                if flow['type'] == TCP_FLAGS_TYPE:
+                    self.dataTable.on_tcp_flags_package(flow)
+
     # public
     def on_add_flow(self, info):
         self.add_counter = self.add_counter + 1
@@ -81,6 +95,17 @@ class FlowDataTableV2:
         else:
             self.active_flows = insert_into_sorted_list(self.active_flows, new_flow)
         return new_flow
+
+    # public
+    def on_tcp_flags_package(self, tcp_flow_data):
+        index = self.find_active_flow(tcp_flow_data)
+        exists = index != -1
+        if exists:
+            flow = self.active_flows[index]
+            flow.add_last_tcp_package_data(self.interval, tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
+        else:
+            new_flow = self.on_add_flow(tcp_flow_data)
+            new_flow.set_tcp_finished_flag()
 
     # public
     def on_update(self, data):
@@ -155,17 +180,6 @@ class FlowDataTableV2:
         while len(self.dns_flows) > 0:
             dns_flow = self.dns_flows.pop()
             self.finished_flows.append(dns_flow)
-
-    # public
-    def on_tcp_flags_package(self, tcp_flow_data):
-        index = self.find_active_flow(tcp_flow_data)
-        exists = index != -1
-        if exists:
-            flow = self.active_flows[index]
-            flow.add_last_tcp_package_data(self.interval, tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
-        else:
-            new_flow = self.on_add_flow(tcp_flow_data)
-            new_flow.set_tcp_finished_flag()
 
     def clear_finished_flows(self):
         # remove all flows marked as finished
