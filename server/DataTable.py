@@ -71,20 +71,6 @@ class FlowDataTableV2:
         self.tcp_idle_interval = config['tcp_idle_interval']
         self.udp_idle_interval = config['udp_idle_interval']
 
-    def on_insert_values(self, update_flows):
-        active = []
-
-        for flow in update_list:
-            if flow['type'] is None:
-                continue
-
-            if flow['type'] == NEW_FLOW_TYPE:
-                self.dataTable.on_add_flow(flow)
-
-            else:
-                if flow['type'] == TCP_FLAGS_TYPE:
-                    self.dataTable.on_tcp_flags_package(flow)
-
     # public
     def on_add_flow(self, info):
         self.add_counter = self.add_counter + 1
