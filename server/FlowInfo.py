@@ -156,9 +156,12 @@ class Data:
 
     # public - called from tcp flags
     def add_tcp_flags_data(self, interval, byte_count, packet_count):
+        self.add_additional_data(byte_count, packet_count)
+        self.tcp_flags_interval = interval
+
+    def add_additional_data(self, byte_count, packet_count):
         self.additional_bytes = byte_count
         self.additional_packets = packet_count
-        self.tcp_flags_interval = interval
 
     # public - called from removed
     def remove_padding(self):
@@ -422,6 +425,9 @@ class FlowInfo:
     def add_last_tcp_package_data(self, interval, byte_count, packet_count):
         self.set_tcp_finished_flag()
         self.data.add_tcp_flags_data(interval, byte_count, packet_count)
+
+    def add_additional_data(self, byte_count, packet_count):
+        self.data.add_additional_data(byte_count, packet_count)
 
     def set_tcp_finished_flag(self):
         self.tcp_finished_flag = True

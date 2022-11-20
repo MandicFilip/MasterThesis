@@ -4,6 +4,10 @@ from operator import itemgetter
 from FlowInfo import FlowInfo
 
 
+NEW_FLOW_TYPE = 'NEW_FLOW'
+TCP_FLAGS_TYPE = 'TCP_FLAGS'
+
+
 def init_finished_flows_storage(collect_interval, save_interval, finished_flows_file):
     now = datetime.now()
     current_time = now.strftime("%H:%M:%S")
@@ -54,6 +58,41 @@ def check_data(data):
             data.pop(i)
 
 
+def is_same_match(flow1, flow2):
+    return flow1['ip_src'] == flow2['ip_src'] and flow1['ip_dst'] == flow2['ip_dst'] and flow1['port_src'] == flow2['port_src'] and flow1['port_dst'] == flow2['port_dst']
+
+
+def merge_inputs(flow1, flow2):
+    flow1['byte_count'] = flow1['byte_count'] + flow2['byte_count']
+    flow1['packet_count'] = flow1['packet_count'] + flow2['packet_count']
+    if flow2['type'] == TCP_FLAGS_TYPE:
+        flow1['type'] = TCP_FLAGS_TYPE
+
+
+def update_flows_pre_processing(update_flows):
+    active = []
+    dns = []
+
+    for flow in update_flows:
+        if flow.is_dns_communication():
+            dns.append(flow)
+            flow.process_dns()
+        else:
+            active.append(flow)
+
+    active.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
+
+    i = 0
+    while i < len(active):
+        current = active[i]
+        i = i + 1
+        while i < len(active) and is_same_match(current, active[i]):
+            merge_inputs(current, active[i])
+            active.pop(i)
+
+    return active, dns
+
+
 class FlowDataTableV2:
     def __init__(self):
         self.is_initialized = False
@@ -72,11 +111,54 @@ class FlowDataTableV2:
         self.udp_idle_interval = config['udp_idle_interval']
 
     # public
+    def on_insert_values(self, update_flows):
+        new_active_flows, new_dns_flows = update_flows_pre_processing(update_flows)
+        merged_active = []
+
+        i = 0
+        j = 0
+        while (i < len(new_active_flows)) and (j < len(self.active_flows)):
+            value = self.active_flows[j].compare_match_to_entry(new_active_flows[i])
+
+            if value < 0:
+                new_flow = FlowInfo(self.interval, new_active_flows[i], self.tcp_idle_interval, self.udp_idle_interval)
+                merged_active.append(new_flow)
+                i = i + 1
+            elif value > 0:
+                merged_active.append(self.active_flows[j])
+                j = j + 1
+            else:
+                flow = new_active_flows[i]
+                if flow['type'] == NEW_FLOW_TYPE:
+                    self.active_flows[j].add_additional_data(flow['byte_count'], flow['packet_count'])
+                else:
+                    if flow['type'] == TCP_FLAGS_TYPE:
+                        self.active_flows[j].on_tcp_flags_package(flow['byte_count'], flow['packet_count'])
+
+                merged_active.append(self.active_flows[j])
+                i = i + 1
+                j = j + 1
+
+        while i < len(new_active_flows):
+            new_flow = FlowInfo(self.interval, new_active_flows[i], self.tcp_idle_interval, self.udp_idle_interval)
+            merged_active.append(new_flow)
+            i = i + 1
+
+        while j < len(self.active_flows):
+            merged_active.append(self.active_flows[j])
+            j = j + 1
+
+        for flow in new_dns_flows:
+            self.dns_flows.append(flow)
+
+        self.active_flows = merged_active
+
+    # public
     def on_add_flow(self, info):
         self.add_counter = self.add_counter + 1
         new_flow = FlowInfo(self.interval, info, self.tcp_idle_interval, self.udp_idle_interval)
         if new_flow.is_dns_communication():
-            self.dns_flows = insert_into_sorted_list(self.dns_flows, new_flow)
+            self.dns_flows.append(new_flow)
             new_flow.process_dns()
         else:
             self.active_flows = insert_into_sorted_list(self.active_flows, new_flow)
