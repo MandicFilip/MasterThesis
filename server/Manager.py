@@ -1,4 +1,4 @@
-from DataTable import FlowDataTableV2, init_finished_flows_storage
+from DataTable import FlowDataTable, init_finished_flows_storage
 from DummyTable import DummyTable
 import time
 
@@ -6,17 +6,19 @@ NEW_FLOW_TYPE = 'NEW_FLOW'
 TCP_FLAGS_TYPE = 'TCP_FLAGS'
 
 PERFORMANCE_FILE = 'performance.info'
+CSV_FORMAT_FILE = 'performance.csv'
 
 
 class Manager:
     def __init__(self):
         self.dataTable = DummyTable()
-        self.operationalDataTable = FlowDataTableV2()
+        self.operationalDataTable = FlowDataTable()
         self.save_counter = 0
         self.save_interval = 0
         self.active_flows_file = ''
         self.finished_flows_file = ''
-        self.performance_reports = []
+        self.performance_data = []
+        self.init_csv_file()
 
     def initialize(self, config):
         init_finished_flows_storage(config['collect_interval'], config['save_interval'], config['finished_flows_file'])
@@ -37,34 +39,28 @@ class Manager:
             self.handle_stats(stats)
             return
 
-        for flow in update_list:
-            if flow['type'] is None:
-                continue
+        self.dataTable.on_insert_values(update_list)
+        update_flows = round(time.time() * 1000) - start_time
 
-            if flow['type'] == NEW_FLOW_TYPE:
-                self.dataTable.on_add_flow(flow)
-
-            else:
-                if flow['type'] == TCP_FLAGS_TYPE:
-                    self.dataTable.on_tcp_flags_package(flow)
-
-        update_flows_end = round(time.time() * 1000)
-
-        self.handle_stats(stats)
-        update_stats_end = round(time.time() * 1000)
+        update_counters, update_state = self.handle_stats(stats)
 
         calc_time, save_time = self.handle_save()
 
-        end = round(time.time() * 1000)
+        total_time = round(time.time() * 1000) - start_time
 
-        report = self.generate_report(pack, start_time, update_flows_end, update_stats_end, calc_time, save_time, end)
-        print(report + '\n')
-        self.performance_reports.append(report)
+        self.save_performance(pack, update_flows, update_counters, update_state, calc_time, save_time, total_time)
 
     def handle_stats(self, stats):
         if stats is None:
-            return
+            return 0, 0
+
+        start_time = round(time.time() * 1000)
         self.dataTable.on_update(stats)
+        end_update_counters = round(time.time() * 1000)
+        update_counters = end_update_counters - start_time
+        self.dataTable.update_flow_status()
+        update_state = round(time.time() * 1000) - end_update_counters
+        return update_counters, update_state
 
     def handle_save(self):
         self.save_counter = self.save_counter + 1
@@ -74,34 +70,73 @@ class Manager:
             self.dataTable.calc_stats()
             mid = round(time.time() * 1000)
             self.dataTable.on_save_flows(self.active_flows_file, self.finished_flows_file)
-            self.write_performance_analysis()
             end = round(time.time() * 1000)
+            self.write_performance_analysis()
             calc_time = mid - start
             save_time = end - mid
             return calc_time, save_time
         return 0, 0
 
-    def generate_report(self, pack, start_time, update_flows_end, update_stats_end, calc_time, save_time, end_time):
-        update_list = pack['update']
-        stats = pack['stats']
-        total_time = end_time - start_time
-        update_flows_time = update_flows_end - start_time
-        update_stats_time = update_stats_end - update_flows_end
-        queue_time = pack['get_time'] - pack['put_time']
-        queue_size = pack['queue_size']
+    def save_performance(self, pack, update_flows, update_counters, update_state, calc_time, save_time, total_time):
+        performance_struct = {}
+        performance_struct['interval'] = str(self.dataTable.get_interval())
 
-        report = f'Interval: {str(self.dataTable.get_interval())}'
-        report = report + f'   Time(ms): (Total, insert, update, calc, save, queue): '
-        report = report + f'({str(total_time)}, {str(update_flows_time)}, {str(update_stats_time)}, {str(calc_time)}, {str(save_time)}, {str(queue_time)})'
+        performance_struct['total_time'] = str(total_time)
+        performance_struct['update_flows'] = str(update_flows)
+        performance_struct['update_counters'] = str(update_counters)
+        performance_struct['update_state'] = str(update_state)
+        performance_struct['calc_time'] = str(calc_time)
+        performance_struct['save_time'] = str(save_time)
+        performance_struct['queue_time'] = str(pack['get_time'] - pack['put_time'])
+
+        performance_struct['active'] = str(len(self.dataTable.active_flows))
+        performance_struct['finished'] = str(len(self.dataTable.finished_flows))
+        performance_struct['insert'] = str(len(pack['update']))
+        performance_struct['stats'] = str(len(pack['stats']))
+        performance_struct['queue_size'] = str(pack['queue_size'])
+
+        print(f'Interval: {self.dataTable.get_interval()}   total_time: {total_time}   active: {str(len(self.dataTable.active_flows))}   finished: {str(len(self.dataTable.finished_flows))}' + '\n')
+        self.performance_data.append(performance_struct)
+
+    def generate_report(self, performance_struct):
+        interval = performance_struct['interval']
+
+        total_time = performance_struct['total_time']
+        update_flows = performance_struct['update_flows']
+        update_counters = performance_struct['update_counters']
+        update_state = performance_struct['update_state']
+        calc_time = performance_struct['calc_time']
+        save_time = performance_struct['save_time']
+        queue_time = performance_struct['queue_time']
+
+        active = performance_struct['active']
+        finished = performance_struct['finished']
+        insert = performance_struct['insert']
+        stats = performance_struct['stats']
+        queue_size = performance_struct['queue_size']
+
+        report = f'Interval: {interval}'
+        report = report + f'   Time(ms): (Total, insert, update counters, update state, calc, save, queue): '
+        report = report + f'({total_time}, {update_flows}, {update_counters}, {update_state}, {calc_time}, {save_time}, {queue_time})'
         report = report + f'     size: (active, finished, insert, update, queue):  '
-        report = report + f'({str(len(self.dataTable.active_flows))}, {str(len(self.dataTable.finished_flows))}, {str(len(update_list))}, {str(len(stats))}, {str(queue_size)})\n'
-        return report
+        report = report + f'({active}, {finished}, {insert}, {stats}, {queue_size})\n'
+
+        csv_line = f"{interval},{total_time},{update_flows},{update_counters},{update_state},{calc_time},{save_time},{queue_time},{active},{finished},{insert},{stats},{queue_size}\n"
+        return report, csv_line
 
     def write_performance_analysis(self):
         performance_file = open(PERFORMANCE_FILE, "a")
+        csv_file = open(CSV_FORMAT_FILE, "a")
 
-        for report in self.performance_reports:
+        for perf in self.performance_data:
+            report, csv_line = self.generate_report(perf)
             performance_file.write(report)
+            csv_file.write(csv_line)
 
-        self.performance_reports.clear()
+        self.performance_data.clear()
         performance_file.close()
+
+    def init_csv_file(self):
+        csv_file = open(CSV_FORMAT_FILE, "a")
+        csv_file.write("interval, total, insert, update counters, update state, calc, save, queue time, active, finished, insert, update, queue size\n")
+        csv_file.close()

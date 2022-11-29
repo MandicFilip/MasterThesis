@@ -3,9 +3,11 @@ from datetime import datetime
 from operator import itemgetter
 from FlowInfo import FlowInfo
 
-
 NEW_FLOW_TYPE = 'NEW_FLOW'
 TCP_FLAGS_TYPE = 'TCP_FLAGS'
+TCP_PROTOCOL_CODE = 6
+UDP_PROTOCOL_CODE = 17
+DNS_PORT = 53
 
 
 def init_finished_flows_storage(collect_interval, save_interval, finished_flows_file):
@@ -39,14 +41,6 @@ def find_flow(flows_list, key):
     return -1
 
 
-def insert_into_sorted_list(flow_list, flow):
-    i = 0
-    while i < len(flow_list) and flow_list[i].compare_flows(flow) == 1:
-        i = i + 1
-    flow_list.insert(i, flow)
-    return flow_list
-
-
 def check_data(data):
     i = 0
     while i < len(data):
@@ -58,6 +52,10 @@ def check_data(data):
             data.pop(i)
 
 
+def is_dns(flow):
+    return flow['protocol_code'] == UDP_PROTOCOL_CODE and (flow['port_src'] == DNS_PORT or flow['port_dst'] == DNS_PORT)
+
+
 def is_same_match(flow1, flow2):
     return flow1['ip_src'] == flow2['ip_src'] and flow1['ip_dst'] == flow2['ip_dst'] and flow1['port_src'] == flow2['port_src'] and flow1['port_dst'] == flow2['port_dst']
 
@@ -67,6 +65,7 @@ def merge_inputs(flow1, flow2):
     flow1['packet_count'] = flow1['packet_count'] + flow2['packet_count']
     if flow2['type'] == TCP_FLAGS_TYPE:
         flow1['type'] = TCP_FLAGS_TYPE
+    return flow1
 
 
 def update_flows_pre_processing(update_flows):
@@ -74,9 +73,8 @@ def update_flows_pre_processing(update_flows):
     dns = []
 
     for flow in update_flows:
-        if flow.is_dns_communication():
+        if is_dns(flow):
             dns.append(flow)
-            flow.process_dns()
         else:
             active.append(flow)
 
@@ -84,16 +82,16 @@ def update_flows_pre_processing(update_flows):
 
     i = 0
     while i < len(active):
-        current = active[i]
+        j = i + 1
+        while j < len(active) and is_same_match(active[i], active[j]):
+            active[i] = merge_inputs(active[i], active[j])
+            active.pop(j)
         i = i + 1
-        while i < len(active) and is_same_match(current, active[i]):
-            merge_inputs(current, active[i])
-            active.pop(i)
 
     return active, dns
 
 
-class FlowDataTableV2:
+class FlowDataTable:
     def __init__(self):
         self.is_initialized = False
         self.active_flows = []
@@ -122,6 +120,8 @@ class FlowDataTableV2:
 
             if value < 0:
                 new_flow = FlowInfo(self.interval, new_active_flows[i], self.tcp_idle_interval, self.udp_idle_interval)
+                if new_active_flows[i]['type'] == TCP_FLAGS_TYPE:
+                    new_flow.set_tcp_finished_flag()
                 merged_active.append(new_flow)
                 i = i + 1
             elif value > 0:
@@ -133,7 +133,7 @@ class FlowDataTableV2:
                     self.active_flows[j].add_additional_data(flow['byte_count'], flow['packet_count'])
                 else:
                     if flow['type'] == TCP_FLAGS_TYPE:
-                        self.active_flows[j].on_tcp_flags_package(flow['byte_count'], flow['packet_count'])
+                        self.active_flows[j].add_last_tcp_package_data(self.interval, flow['byte_count'], flow['packet_count'])
 
                 merged_active.append(self.active_flows[j])
                 i = i + 1
@@ -149,38 +149,17 @@ class FlowDataTableV2:
             j = j + 1
 
         for flow in new_dns_flows:
-            self.dns_flows.append(flow)
+            new_flow = FlowInfo(self.interval, flow, self.tcp_idle_interval, self.udp_idle_interval)
+            new_flow.process_dns()
+            self.dns_flows.append(new_flow)
 
         self.active_flows = merged_active
-
-    # public
-    def on_add_flow(self, info):
-        self.add_counter = self.add_counter + 1
-        new_flow = FlowInfo(self.interval, info, self.tcp_idle_interval, self.udp_idle_interval)
-        if new_flow.is_dns_communication():
-            self.dns_flows.append(new_flow)
-            new_flow.process_dns()
-        else:
-            self.active_flows = insert_into_sorted_list(self.active_flows, new_flow)
-        return new_flow
-
-    # public
-    def on_tcp_flags_package(self, tcp_flow_data):
-        index = self.find_active_flow(tcp_flow_data)
-        exists = index != -1
-        if exists:
-            flow = self.active_flows[index]
-            flow.add_last_tcp_package_data(self.interval, tcp_flow_data['byte_count'], tcp_flow_data['packet_count'])
-        else:
-            new_flow = self.on_add_flow(tcp_flow_data)
-            new_flow.set_tcp_finished_flag()
 
     # public
     def on_update(self, data):
         check_data(data)
         data.sort(key=itemgetter('ip_src', 'ip_dst', 'port_src', 'port_dst'))
         self.update_active_flows_table(data)
-        self.update_flow_status()
 
     def update_active_flows_table(self, sorted_data):
         i = 0

@@ -1,4 +1,8 @@
 class DummyTable:
+    def __init__(self):
+        self.active_flows = []
+        self.finished_flows = []
+
     def initialize(self, tcp_idle_interval, udp_idle_interval):
         return
 
@@ -6,7 +10,7 @@ class DummyTable:
         return
 
     def on_update(self, data):
-        return
+        return 0, 0
 
     def on_tcp_flags_package(self, tcp_flow_data):
         return
@@ -19,3 +23,9 @@ class DummyTable:
 
     def get_interval(self):
         return 0
+
+    def on_insert_values(self, update_flows):
+        return
+
+    def update_flow_status():
+        return
