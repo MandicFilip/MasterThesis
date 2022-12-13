@@ -431,12 +431,12 @@ class SwitchController(app_manager.RyuApp):
         self.CONF.register_opts([cfg.IntOpt('TCP_IDLE_TIMEOUT', default=60, help='Idle Timeout')])
         self.CONF.register_opts([cfg.IntOpt('UDP_IDLE_TIMEOUT', default=10, help='Idle Timeout'),
                                  cfg.IntOpt('DELETE_INTERVAL', default=1, help='Delete Interval')])
-        self.CONF.register_opts([cfg.IntOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
+        self.CONF.register_opts([cfg.FloatOpt('COLLECT_INTERVAL', default=10, help='Interval for collecting stats')])
         self.CONF.register_opts([cfg.IntOpt('SAVE_INTERVAL', default=10, help='Interval for saving data to file')])
         self.CONF.register_opts([cfg.StrOpt('ACTIVE_FLOWS_FILE', default='active_flows.info', help='active flows')])
         self.CONF.register_opts(
             [cfg.StrOpt('FINISHED_FLOWS_FILE', default='finished_flows.info', help='finished flows')])
-        self.logger.info("Collect Interval: %d seconds", self.CONF.COLLECT_INTERVAL)
+        self.logger.info("Collect Interval: %f seconds", self.CONF.COLLECT_INTERVAL)
         self.logger.info("Save Interval: %d seconds", self.CONF.SAVE_INTERVAL)
         self.logger.info("Tcp Idle timeout: %d seconds", self.CONF.TCP_IDLE_TIMEOUT)
         self.logger.info("Udp Idle timeout: %d seconds", self.CONF.UDP_IDLE_TIMEOUT)
@@ -476,9 +476,9 @@ class SwitchController(app_manager.RyuApp):
         add_flow(datapath, TCP_FLAGS_PRIORITY_LEVEL, match, actions)
 
         data = {'collect_interval': self.CONF.COLLECT_INTERVAL,
-                'save_interval': self.CONF.SAVE_INTERVAL,
-                'tcp_idle_interval': self.CONF.TCP_IDLE_TIMEOUT,
-                'udp_idle_interval': self.CONF.UDP_IDLE_TIMEOUT,
+                'save_interval': int(round(self.CONF.SAVE_INTERVAL / self.CONF.COLLECT_INTERVAL)),
+                'tcp_idle_interval': int(round(self.CONF.TCP_IDLE_TIMEOUT / self.CONF.COLLECT_INTERVAL)),
+                'udp_idle_interval': int(round(self.CONF.UDP_IDLE_TIMEOUT / self.CONF.COLLECT_INTERVAL)),
                 'active_flows_file': self.CONF.ACTIVE_FLOWS_FILE,
                 'finished_flows_file': self.CONF.FINISHED_FLOWS_FILE
                 }
