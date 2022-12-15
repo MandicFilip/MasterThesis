@@ -2,10 +2,14 @@ from operator import itemgetter
 
 
 WIRESHARK_DATA_FILE_STRESS = '..\\wireshark_data\\stress_test.txt'
-FINISHED_FLOWS_FILE_STRESS = '..\\output\\stress\\finished_flows.info'
+FINISHED_FLOWS_FILE_STRESS_SECOND = '..\\output\\stress\\finished_flows.info'
+FINISHED_FLOWS_FILE_STRESS_HALF = '..\\output\\half\\stress\\finished_flows.info'
+FINISHED_FLOWS_FILE_STRESS_QUARTER = '..\\output\\quarter\\stress\\finished_flows.info'
 
 WIRESHARK_DATA_FILE_CUSTOM = '..\\wireshark_data\\custom_test.txt'
-FINISHED_FLOWS_FILE_CUSTOM = '..\\output\\custom\\finished_flows.info'
+FINISHED_FLOWS_FILE_CUSTOM_SECOND = '..\\output\\second\\custom\\finished_flows.info'
+FINISHED_FLOWS_FILE_CUSTOM_HALF = '..\\output\\half\\custom\\finished_flows.info'
+FINISHED_FLOWS_FILE_CUSTOM_QUARTER = '..\\output\\quarter\\custom\\finished_flows.info'
 
 
 OUTPUT_FILE = 'output_stress.txt'
@@ -220,11 +224,11 @@ def compare(wireshark_flows, traffic_monitor_flows, output):
 
 
 def main():
-    wireshark_flows = read_csv(WIRESHARK_DATA_FILE_STRESS)
+    wireshark_flows = read_csv(WIRESHARK_DATA_FILE_CUSTOM)
     wireshark_flows = process_flows(wireshark_flows)
     print('Wireshark: ' + str(len(wireshark_flows)))
 
-    traffic_monitor_flows = read_finished_flows(FINISHED_FLOWS_FILE_STRESS)
+    traffic_monitor_flows = read_finished_flows(FINISHED_FLOWS_FILE_CUSTOM_HALF)
     traffic_monitor_flows = process_flows(traffic_monitor_flows)
     print('Traffic monitor: ' + str(len(traffic_monitor_flows)))
 
